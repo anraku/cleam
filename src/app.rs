@@ -12,6 +12,7 @@ pub struct StatefulList<T> {
     pub state: ratatui::widgets::ListState,
     pub next_token: Option<String>,
     pub loading: bool,
+    pub visible_indices: Option<Vec<usize>>,
 }
 
 impl<T> StatefulList<T> {
@@ -21,17 +22,18 @@ impl<T> StatefulList<T> {
             state: ratatui::widgets::ListState::default(),
             next_token: None,
             loading: false,
+            visible_indices: None,
         }
     }
 
     pub fn next(&mut self) {
+        let len = match &self.visible_indices {
+            Some(v) => v.len(),
+            None => self.items.len(),
+        };
         let i = match self.state.selected() {
             Some(i) => {
-                if i >= self.items.len().saturating_sub(1) {
-                    i
-                } else {
-                    i + 1
-                }
+                if i >= len.saturating_sub(1) { i } else { i + 1 }
             }
             None => 0,
         };
@@ -47,11 +49,24 @@ impl<T> StatefulList<T> {
     }
 
     pub fn selected(&self) -> Option<&T> {
-        self.state.selected().and_then(|i| self.items.get(i))
+        self.state.selected().and_then(|i| match &self.visible_indices {
+            Some(v) => v.get(i).and_then(|&orig| self.items.get(orig)),
+            None => self.items.get(i),
+        })
     }
 
     pub fn selected_index(&self) -> Option<usize> {
-        self.state.selected()
+        self.state.selected().and_then(|i| match &self.visible_indices {
+            Some(v) => v.get(i).copied(),
+            None => Some(i),
+        })
+    }
+
+    pub fn visible_items(&self) -> Vec<&T> {
+        match &self.visible_indices {
+            Some(v) => v.iter().filter_map(|&i| self.items.get(i)).collect(),
+            None => self.items.iter().collect(),
+        }
     }
 }
 
@@ -99,6 +114,8 @@ pub struct App {
     pub viewer_scroll: u16,
     pub last_selected_group: Option<usize>,
     pub needs_clear: bool,
+    pub main_search_query: String,
+    pub main_search_active: bool,
 }
 
 impl App {
@@ -117,6 +134,8 @@ impl App {
             viewer_scroll: 0,
             last_selected_group: None,
             needs_clear: false,
+            main_search_query: String::new(),
+            main_search_active: false,
         }
     }
 
@@ -160,36 +179,127 @@ impl App {
         }
     }
 
-    async fn handle_main_key(&mut self, code: KeyCode) -> Result<bool> {
-        match code {
-            KeyCode::Char('q') => return Ok(true),
-            KeyCode::Char('l') => {
-                self.active_panel = ActivePanel::Streams
-            },
-            KeyCode::Char('h') => {
-                self.active_panel = ActivePanel::Groups
-            },
-            KeyCode::Char('j') | KeyCode::Down => match self.active_panel {
-                ActivePanel::Groups => self.log_groups.next(),
-                ActivePanel::Streams => self.log_streams.next(),
-            },
-            KeyCode::Char('k') | KeyCode::Up => match self.active_panel {
-                ActivePanel::Groups => self.log_groups.previous(),
-                ActivePanel::Streams => self.log_streams.previous(),
-            },
-            KeyCode::Enter => {
-                if self.active_panel == ActivePanel::Streams
-                    && !self.log_streams.items.is_empty()
-                    && self.log_streams.state.selected().is_some()
-                {
-                    self.screen = Screen::Events;
-                    self.needs_clear = true;
-                    self.log_events = StatefulList::new();
-                    self.filter_input = None;
-                    self.load_log_events().await?;
+    fn apply_main_search(&mut self) {
+        let query = self.main_search_query.to_lowercase();
+        match self.active_panel {
+            ActivePanel::Groups => {
+                if query.is_empty() {
+                    self.log_groups.visible_indices = None;
+                } else {
+                    let indices: Vec<usize> = self.log_groups.items.iter().enumerate()
+                        .filter(|(_, g)| g.name.to_lowercase().contains(&query))
+                        .map(|(i, _)| i)
+                        .collect();
+                    let new_pos = if indices.is_empty() { None } else { Some(0) };
+                    self.log_groups.visible_indices = Some(indices);
+                    self.log_groups.state.select(new_pos);
                 }
             }
-            _ => {}
+            ActivePanel::Streams => {
+                if query.is_empty() {
+                    self.log_streams.visible_indices = None;
+                } else {
+                    let indices: Vec<usize> = self.log_streams.items.iter().enumerate()
+                        .filter(|(_, s)| s.name.to_lowercase().contains(&query))
+                        .map(|(i, _)| i)
+                        .collect();
+                    let new_pos = if indices.is_empty() { None } else { Some(0) };
+                    self.log_streams.visible_indices = Some(indices);
+                    self.log_streams.state.select(new_pos);
+                }
+            }
+        }
+    }
+
+    fn clear_main_search(&mut self) {
+        let selected_group = self.log_groups.selected_index();
+        let selected_stream = self.log_streams.selected_index();
+        self.main_search_active = false;
+        self.main_search_query.clear();
+        self.log_groups.visible_indices = None;
+        self.log_streams.visible_indices = None;
+        self.log_groups.state.select(selected_group);
+        self.log_streams.state.select(selected_stream);
+    }
+
+    async fn handle_main_key(&mut self, code: KeyCode) -> Result<bool> {
+        if self.main_search_active {
+            match code {
+                KeyCode::Esc => {
+                    self.clear_main_search();
+                }
+                KeyCode::Backspace => {
+                    self.main_search_query.pop();
+                    self.apply_main_search();
+                }
+                KeyCode::Char('j') | KeyCode::Down => match self.active_panel {
+                    ActivePanel::Groups => self.log_groups.next(),
+                    ActivePanel::Streams => self.log_streams.next(),
+                },
+                KeyCode::Char('k') | KeyCode::Up => match self.active_panel {
+                    ActivePanel::Groups => self.log_groups.previous(),
+                    ActivePanel::Streams => self.log_streams.previous(),
+                },
+                KeyCode::Char('h') => {
+                    self.active_panel = ActivePanel::Groups;
+                    self.clear_main_search();
+                }
+                KeyCode::Char('l') => {
+                    self.active_panel = ActivePanel::Streams;
+                    self.clear_main_search();
+                }
+                KeyCode::Enter => {
+                    if self.active_panel == ActivePanel::Streams
+                        && self.log_streams.selected().is_some()
+                    {
+                        self.screen = Screen::Events;
+                        self.needs_clear = true;
+                        self.log_events = StatefulList::new();
+                        self.filter_input = None;
+                        self.clear_main_search();
+                        self.load_log_events().await?;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    self.main_search_query.push(c);
+                    self.apply_main_search();
+                }
+                _ => {}
+            }
+        } else {
+            match code {
+                KeyCode::Char('q') => return Ok(true),
+                KeyCode::Char('l') => {
+                    self.active_panel = ActivePanel::Streams;
+                }
+                KeyCode::Char('h') => {
+                    self.active_panel = ActivePanel::Groups;
+                }
+                KeyCode::Char('j') | KeyCode::Down => match self.active_panel {
+                    ActivePanel::Groups => self.log_groups.next(),
+                    ActivePanel::Streams => self.log_streams.next(),
+                },
+                KeyCode::Char('k') | KeyCode::Up => match self.active_panel {
+                    ActivePanel::Groups => self.log_groups.previous(),
+                    ActivePanel::Streams => self.log_streams.previous(),
+                },
+                KeyCode::Char('/') => {
+                    self.main_search_active = true;
+                }
+                KeyCode::Enter => {
+                    if self.active_panel == ActivePanel::Streams
+                        && !self.log_streams.items.is_empty()
+                        && self.log_streams.state.selected().is_some()
+                    {
+                        self.screen = Screen::Events;
+                        self.needs_clear = true;
+                        self.log_events = StatefulList::new();
+                        self.filter_input = None;
+                        self.load_log_events().await?;
+                    }
+                }
+                _ => {}
+            }
         }
         Ok(false)
     }
@@ -324,6 +434,9 @@ impl App {
         self.log_groups.items.extend(groups);
         self.log_groups.next_token = next;
         self.log_groups.loading = false;
+        if self.active_panel == ActivePanel::Groups && !self.main_search_query.is_empty() {
+            self.apply_main_search();
+        }
         Ok(())
     }
 
@@ -354,6 +467,9 @@ impl App {
         self.log_streams.items.extend(streams);
         self.log_streams.next_token = next;
         self.log_streams.loading = false;
+        if !self.main_search_query.is_empty() {
+            self.apply_main_search();
+        }
         Ok(())
     }
 

@@ -55,8 +55,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .iter()
             .map(|e| {
                 let ts = format_timestamp(e.timestamp);
-                let first_line = e.message.lines().next().unwrap_or("").trim();
-                let msg = truncate_chars(first_line, available);
+                // 全行を trim して空行を除き、スペース区切りで1行に結合
+                let joined = e.message
+                    .lines()
+                    .map(|l| l.trim())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("    ");
+                // 文字数ではなく「表示列数」でtruncate
+                let msg = truncate_cols(&joined, available_cols);
                 let mut spans = vec![
                     Span::styled(ts, Style::default().fg(Color::DarkGray)),
                     Span::raw("  "),

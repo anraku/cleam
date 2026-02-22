@@ -98,6 +98,7 @@ pub struct App {
     pub filter_buffer: String,
     pub viewer_scroll: u16,
     pub last_selected_group: Option<usize>,
+    pub needs_clear: bool,
 }
 
 impl App {
@@ -115,6 +116,7 @@ impl App {
             filter_buffer: String::new(),
             viewer_scroll: 0,
             last_selected_group: None,
+            needs_clear: false,
         }
     }
 
@@ -123,6 +125,10 @@ impl App {
         self.load_log_groups().await?;
 
         loop {
+            if self.needs_clear {
+                terminal.clear()?;
+                self.needs_clear = false;
+            }
             terminal.draw(|f| ui::draw(f, self))?;
 
             if event::poll(Duration::from_millis(100))? {
@@ -177,6 +183,7 @@ impl App {
                     && self.log_streams.state.selected().is_some()
                 {
                     self.screen = Screen::Events;
+                    self.needs_clear = true;
                     self.log_events = StatefulList::new();
                     self.filter_input = None;
                     self.load_log_events().await?;
@@ -217,6 +224,7 @@ impl App {
             match code {
                 KeyCode::Char('q') => {
                     self.screen = Screen::Main;
+                    self.needs_clear = true;
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.log_events.next(),
                 KeyCode::Char('k') | KeyCode::Up => self.log_events.previous(),
@@ -229,6 +237,7 @@ impl App {
                         self.selected_event = Some(event);
                         self.viewer_scroll = 0;
                         self.screen = Screen::Viewer;
+                        self.needs_clear = true;
                     }
                 }
                 _ => {}
@@ -241,6 +250,7 @@ impl App {
         match code {
             KeyCode::Char('q') => {
                 self.screen = Screen::Events;
+                self.needs_clear = true;
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.viewer_scroll = self.viewer_scroll.saturating_add(1);

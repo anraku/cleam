@@ -1,21 +1,13 @@
 use anyhow::Result;
-use crossterm::{
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
 use ratatui::DefaultTerminal;
-use std::io;
 
 pub fn init() -> Result<DefaultTerminal> {
-    enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
-    let terminal = ratatui::init();
-    Ok(terminal)
+    // ratatui::init() handles enable_raw_mode + EnterAlternateScreen internally
+    Ok(ratatui::init())
 }
 
 pub fn restore() -> Result<()> {
+    // ratatui::restore() handles disable_raw_mode + LeaveAlternateScreen internally
     ratatui::restore();
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
     Ok(())
 }

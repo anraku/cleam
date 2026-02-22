@@ -45,9 +45,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let msg = Paragraph::new("  No events found.").block(block);
         f.render_widget(msg, chunks[1]);
     } else {
-        // timestamp col width: "HH:MM:SS.mmm" = 12
-        let ts_width: usize = 12;
-        let available = chunks[1].width.saturating_sub(6 + ts_width as u16 + 2) as usize;
+        // timestamp col width: "YYYY-MM-DD HH:MM:SS.mmm" = 23
+        let ts_width: usize = 23;
+        // subtract: borders(2) + highlight symbol "▶ " (▶ renders as 2 cols + space = 3) + separator "  "(2)
+        let available = (chunks[1].width as usize)
+            .saturating_sub(2 + 3 + ts_width + 2);
 
         let items: Vec<ListItem> = app
             .log_events
@@ -58,12 +60,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 // 全行を trim して空行を除き、スペース区切りで1行に結合
                 let joined = e.message
                     .lines()
-                    .map(|l| l.trim())
+                    .map(|l| l.trim().replace('\t', " "))
                     .filter(|l| !l.is_empty())
                     .collect::<Vec<_>>()
-                    .join("    ");
+                    .join(" ");
                 // 文字数ではなく「表示列数」でtruncate
-                let msg = truncate_cols(&joined, available_cols);
+                let msg = truncate_chars(&joined, available);
                 let mut spans = vec![
                     Span::styled(ts, Style::default().fg(Color::DarkGray)),
                     Span::raw("  "),
@@ -120,7 +122,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn format_timestamp(ts_ms: i64) -> String {
     let dt = DateTime::<Utc>::from_timestamp(ts_ms / 1000, ((ts_ms % 1000) * 1_000_000) as u32)
         .unwrap_or_default();
-    dt.format("%H:%M:%S%.3f").to_string()
+    dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
 }
 
 /// Truncate to at most `max` Unicode scalar values, appending `…` if cut.

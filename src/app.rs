@@ -2,7 +2,7 @@ use anyhow::Result;
 use aws_sdk_cloudwatchlogs::Client;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use crate::aws;
 use crate::ui;
@@ -358,13 +358,8 @@ impl App {
         };
         let filter = self.filter_input.clone();
         self.log_events.loading = true;
-        let start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64
-            - 3_600_000; // 1 hour ago
         let (events, token) =
-            aws::fetch_log_events(&self.client, &group_name, &stream_name, start_time, filter, None).await?;
+            aws::fetch_log_events(&self.client, &group_name, &stream_name, None, filter, None).await?;
         self.log_events.items = events;
         self.log_events.next_token = token;
         self.log_events.loading = false;
@@ -384,15 +379,10 @@ impl App {
             None => return Ok(()),
         };
         let filter = self.filter_input.clone();
-        let start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64
-            - 3_600_000;
         let token = self.log_events.next_token.clone();
         self.log_events.loading = true;
         let (events, next) =
-            aws::fetch_log_events(&self.client, &group_name, &stream_name, start_time, filter, token).await?;
+            aws::fetch_log_events(&self.client, &group_name, &stream_name, None, filter, token).await?;
         self.log_events.items.extend(events);
         self.log_events.next_token = next;
         self.log_events.loading = false;

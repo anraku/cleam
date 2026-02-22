@@ -157,12 +157,12 @@ impl App {
     async fn handle_main_key(&mut self, code: KeyCode) -> Result<bool> {
         match code {
             KeyCode::Char('q') => return Ok(true),
-            KeyCode::Tab => {
-                self.active_panel = match self.active_panel {
-                    ActivePanel::Groups => ActivePanel::Streams,
-                    ActivePanel::Streams => ActivePanel::Groups,
-                };
-            }
+            KeyCode::Char('l') => {
+                self.active_panel = ActivePanel::Streams
+            },
+            KeyCode::Char('h') => {
+                self.active_panel = ActivePanel::Groups
+            },
             KeyCode::Char('j') | KeyCode::Down => match self.active_panel {
                 ActivePanel::Groups => self.log_groups.next(),
                 ActivePanel::Streams => self.log_streams.next(),

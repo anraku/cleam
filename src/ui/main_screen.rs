@@ -144,8 +144,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // --- Footer ---
     let footer_idx = if app.main_search_active { 3 } else { 2 };
     let footer = Paragraph::new(Line::from(vec![
-        Span::styled(" [Tab]", Style::default().fg(Color::Yellow)),
-        Span::raw(" Switch Panel  "),
+        Span::styled("[h]", Style::default().fg(Color::Yellow)),
+        Span::raw(" Switch LogGroups  "),
+        Span::styled("[l]", Style::default().fg(Color::Yellow)),
+        Span::raw(" Switch LogStreams "),
         Span::styled("[Enter]", Style::default().fg(Color::Yellow)),
         Span::raw(" Open Stream  "),
         Span::styled("[/]", Style::default().fg(Color::Yellow)),

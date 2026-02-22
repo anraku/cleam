@@ -232,22 +232,6 @@ impl App {
                     self.main_search_query.pop();
                     self.apply_main_search();
                 }
-                KeyCode::Char('j') | KeyCode::Down => match self.active_panel {
-                    ActivePanel::Groups => self.log_groups.next(),
-                    ActivePanel::Streams => self.log_streams.next(),
-                },
-                KeyCode::Char('k') | KeyCode::Up => match self.active_panel {
-                    ActivePanel::Groups => self.log_groups.previous(),
-                    ActivePanel::Streams => self.log_streams.previous(),
-                },
-                KeyCode::Char('h') => {
-                    self.active_panel = ActivePanel::Groups;
-                    self.clear_main_search();
-                }
-                KeyCode::Char('l') => {
-                    self.active_panel = ActivePanel::Streams;
-                    self.clear_main_search();
-                }
                 KeyCode::Enter => {
                     if self.active_panel == ActivePanel::Streams
                         && self.log_streams.selected().is_some()
@@ -258,6 +242,9 @@ impl App {
                         self.filter_input = None;
                         self.clear_main_search();
                         self.load_log_events().await?;
+                    } else if self.active_panel == ActivePanel::Groups {
+                        self.active_panel = ActivePanel::Streams;
+                        self.clear_main_search();
                     }
                 }
                 KeyCode::Char(c) => {
@@ -296,6 +283,8 @@ impl App {
                         self.log_events = StatefulList::new();
                         self.filter_input = None;
                         self.load_log_events().await?;
+                    } else if self.active_panel == ActivePanel::Groups {
+                        self.active_panel = ActivePanel::Streams;
                     }
                 }
                 _ => {}

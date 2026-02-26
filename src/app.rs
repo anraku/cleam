@@ -233,18 +233,11 @@ impl App {
                     self.apply_main_search();
                 }
                 KeyCode::Enter => {
-                    if self.active_panel == ActivePanel::Streams
-                        && self.log_streams.selected().is_some()
-                    {
-                        self.screen = Screen::Events;
-                        self.needs_clear = true;
-                        self.log_events = StatefulList::new();
-                        self.filter_input = None;
+                    if self.main_search_query.is_empty() {
                         self.clear_main_search();
-                        self.load_log_events().await?;
-                    } else if self.active_panel == ActivePanel::Groups {
-                        self.active_panel = ActivePanel::Streams;
-                        self.clear_main_search();
+                    } else {
+                        self.main_search_active = false;
+                        self.main_search_query.clear();
                     }
                 }
                 KeyCode::Char(c) => {

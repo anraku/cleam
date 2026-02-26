@@ -12,7 +12,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
     // Layout: header / panels / [search bar] / footer
-    let constraints = if app.main_search_active {
+    let show_search_bar = app.main_search_active || !app.main_search_query.is_empty();
+    let constraints = if show_search_bar {
         vec![
             Constraint::Length(1),
             Constraint::Min(0),
@@ -133,16 +134,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(streams_list, panes[1], &mut app.log_streams.state);
     }
 
-    // --- Search bar (shown when search is active) ---
-    if app.main_search_active {
-        let search_text = format!(" Search: {}_", app.main_search_query);
+    // --- Search bar (shown when search is active or query is non-empty) ---
+    if show_search_bar {
+        let search_text = if app.main_search_active {
+            format!(" Search: {}_", app.main_search_query)
+        } else {
+            format!(" Search: {}", app.main_search_query)
+        };
         let search_bar = Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray));
         f.render_widget(search_bar, chunks[2]);
     }
 
     // --- Footer ---
-    let footer_idx = if app.main_search_active { 3 } else { 2 };
+    let footer_idx = if show_search_bar { 3 } else { 2 };
     let footer = Paragraph::new(Line::from(vec![
         Span::styled("[h]", Style::default().fg(Color::Yellow)),
         Span::raw(" Switch LogGroups  "),

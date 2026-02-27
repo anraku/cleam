@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
+use jiff::Timestamp;
 
 use crate::app::{ActivePanel, App};
 
@@ -100,14 +101,34 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(streams_border_style);
 
-    let stream_names: Vec<String> = app.log_streams.visible_items()
+    let stream_entries: Vec<(String, String)> = app.log_streams.visible_items()
         .into_iter()
-        .map(|s| s.name.clone())
+        .map(|s| {
+            let time_str = match s.last_event_time {
+                Some(ms) => {
+                    let Ok(ts) = Timestamp::from_millisecond(ms) else {
+                        return ("--/-- --:--".to_string(), s.name.clone());
+                    };
+                    let dt = ts.to_zoned(jiff::tz::TimeZone::UTC).to_string();
+                    dt
+                }
+                None => "--/-- --:--".to_string(),
+            };
+            (time_str, s.name.clone())
+        })
         .collect();
     let streams_filtered = app.log_streams.visible_indices.is_some();
 
-    let stream_items: Vec<ListItem> = stream_names.iter()
-        .map(|n| ListItem::new(n.as_str()))
+    let stream_items: Vec<ListItem> = stream_entries.iter()
+        .map(|(time_str, name)| {
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{} ", time_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(name.as_str()),
+            ]))
+        })
         .collect();
 
     if stream_items.is_empty() && streams_filtered {

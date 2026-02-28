@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -179,7 +178,11 @@ fn value_spans(value: &str, comma: &str) -> Vec<Span<'static>> {
 }
 
 fn format_timestamp(ts_ms: i64) -> String {
-    let dt = DateTime::<Utc>::from_timestamp(ts_ms / 1000, ((ts_ms % 1000) * 1_000_000) as u32)
-        .unwrap_or_default();
-    dt.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string()
+    match jiff::Timestamp::from_millisecond(ts_ms) {
+        Ok(ts) => {
+            let ms = ts_ms.rem_euclid(1000);
+            format!("{}.{:03} UTC", ts.strftime("%Y-%m-%d %H:%M:%S"), ms)
+        }
+        Err(_) => String::from("0000-00-00 00:00:00.000 UTC"),
+    }
 }

@@ -75,6 +75,8 @@ pub enum Screen {
     Main,
     Events,
     Viewer,
+    EventSearch,
+    GroupEvents,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,10 +114,16 @@ pub struct App {
     pub filter_editing: bool,
     pub filter_buffer: String,
     pub viewer_scroll: u16,
+    pub viewer_origin: Screen,
     pub last_selected_group: Option<usize>,
     pub needs_clear: bool,
     pub main_search_query: String,
     pub main_search_active: bool,
+    pub event_search_start: String,
+    pub event_search_end: String,
+    pub event_search_pattern: String,
+    pub event_search_focused: u8,
+    pub event_search_error: Option<String>,
 }
 
 impl App {
@@ -132,10 +140,16 @@ impl App {
             filter_editing: false,
             filter_buffer: String::new(),
             viewer_scroll: 0,
+            viewer_origin: Screen::Events,
             last_selected_group: None,
             needs_clear: false,
             main_search_query: String::new(),
             main_search_active: false,
+            event_search_start: String::new(),
+            event_search_end: String::new(),
+            event_search_pattern: String::new(),
+            event_search_focused: 0,
+            event_search_error: None,
         }
     }
 
@@ -176,6 +190,8 @@ impl App {
             Screen::Main => self.handle_main_key(code).await,
             Screen::Events => self.handle_events_key(code).await,
             Screen::Viewer => self.handle_viewer_key(code).await,
+            Screen::EventSearch => self.handle_event_search_key(code).await,
+            Screen::GroupEvents => self.handle_group_events_key(code).await,
         }
     }
 
@@ -266,6 +282,19 @@ impl App {
                 KeyCode::Char('/') => {
                     self.main_search_active = true;
                 }
+                KeyCode::Char('g') => {
+                    if self.log_groups.state.selected().is_some() && !self.log_groups.items.is_empty() {
+                        let now = jiff::Zoned::now();
+                        let one_hour_ago = now.saturating_sub(jiff::Span::new().hours(1));
+                        self.event_search_start = one_hour_ago.strftime("%Y-%m-%d %H:%M:%S").to_string();
+                        self.event_search_end = now.strftime("%Y-%m-%d %H:%M:%S").to_string();
+                        self.event_search_pattern = String::new();
+                        self.event_search_focused = 0;
+                        self.event_search_error = None;
+                        self.screen = Screen::EventSearch;
+                        self.needs_clear = true;
+                    }
+                }
                 KeyCode::Enter => {
                     if self.active_panel == ActivePanel::Streams
                         && !self.log_streams.items.is_empty()
@@ -328,6 +357,7 @@ impl App {
                     if let Some(event) = self.log_events.selected().cloned() {
                         self.selected_event = Some(event);
                         self.viewer_scroll = 0;
+                        self.viewer_origin = Screen::Events;
                         self.screen = Screen::Viewer;
                         self.needs_clear = true;
                     }
@@ -341,7 +371,7 @@ impl App {
     async fn handle_viewer_key(&mut self, code: KeyCode) -> Result<bool> {
         match code {
             KeyCode::Char('q') => {
-                self.screen = Screen::Events;
+                self.screen = self.viewer_origin.clone();
                 self.needs_clear = true;
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -349,6 +379,90 @@ impl App {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.viewer_scroll = self.viewer_scroll.saturating_sub(1);
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn handle_event_search_key(&mut self, code: KeyCode) -> Result<bool> {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.screen = Screen::Main;
+                self.needs_clear = true;
+            }
+            KeyCode::Tab => {
+                self.event_search_focused = (self.event_search_focused + 1) % 3;
+            }
+            KeyCode::BackTab => {
+                self.event_search_focused = (self.event_search_focused + 2) % 3;
+            }
+            KeyCode::Backspace => {
+                match self.event_search_focused {
+                    0 => { self.event_search_start.pop(); }
+                    1 => { self.event_search_end.pop(); }
+                    _ => { self.event_search_pattern.pop(); }
+                }
+            }
+            KeyCode::Char(c) => {
+                match self.event_search_focused {
+                    0 => self.event_search_start.push(c),
+                    1 => self.event_search_end.push(c),
+                    _ => self.event_search_pattern.push(c),
+                }
+            }
+            KeyCode::Enter => {
+                let start_ms_result = if self.event_search_start.is_empty() {
+                    Ok(None)
+                } else {
+                    parse_datetime_to_ms(&self.event_search_start).map(Some)
+                };
+                let end_ms_result = if self.event_search_end.is_empty() {
+                    Ok(None)
+                } else {
+                    parse_datetime_to_ms(&self.event_search_end).map(Some)
+                };
+                match (start_ms_result, end_ms_result) {
+                    (Ok(start_ms), Ok(end_ms)) => {
+                        self.event_search_error = None;
+                        self.log_events = StatefulList::new();
+                        self.load_group_events(start_ms, end_ms).await?;
+                        self.screen = Screen::GroupEvents;
+                        self.needs_clear = true;
+                    }
+                    (Err(_), _) => {
+                        self.event_search_error = Some(
+                            "開始日時の形式が不正です（例: 2024-01-01 12:00:00）".to_string(),
+                        );
+                    }
+                    (_, Err(_)) => {
+                        self.event_search_error = Some(
+                            "終了日時の形式が不正です（例: 2024-01-01 12:00:00）".to_string(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn handle_group_events_key(&mut self, code: KeyCode) -> Result<bool> {
+        match code {
+            KeyCode::Char('q') => {
+                self.screen = Screen::EventSearch;
+                self.needs_clear = true;
+            }
+            KeyCode::Char('j') | KeyCode::Down => self.log_events.next(),
+            KeyCode::Char('k') | KeyCode::Up => self.log_events.previous(),
+            KeyCode::Enter => {
+                if let Some(event) = self.log_events.selected().cloned() {
+                    self.selected_event = Some(event);
+                    self.viewer_scroll = 0;
+                    self.viewer_origin = Screen::GroupEvents;
+                    self.screen = Screen::Viewer;
+                    self.needs_clear = true;
+                }
             }
             _ => {}
         }
@@ -467,7 +581,7 @@ impl App {
         let filter = self.filter_input.clone();
         self.log_events.loading = true;
         let (events, token) =
-            aws::fetch_log_events(&self.client, &group_name, &stream_name, None, filter, None).await?;
+            aws::fetch_log_events(&self.client, &group_name, Some(&stream_name), None, None, filter, None).await?;
         self.log_events.items = events;
         self.log_events.next_token = token;
         self.log_events.loading = false;
@@ -490,10 +604,44 @@ impl App {
         let token = self.log_events.next_token.clone();
         self.log_events.loading = true;
         let (events, next) =
-            aws::fetch_log_events(&self.client, &group_name, &stream_name, None, filter, token).await?;
+            aws::fetch_log_events(&self.client, &group_name, Some(&stream_name), None, None, filter, token).await?;
         self.log_events.items.extend(events);
         self.log_events.next_token = next;
         self.log_events.loading = false;
         Ok(())
     }
+
+    async fn load_group_events(&mut self, start_ms: Option<i64>, end_ms: Option<i64>) -> Result<()> {
+        let group_name = match self.log_groups.selected() {
+            Some(g) => g.name.clone(),
+            None => return Ok(()),
+        };
+        let pattern = if self.event_search_pattern.is_empty() {
+            None
+        } else {
+            Some(self.event_search_pattern.clone())
+        };
+        self.log_events.loading = true;
+        let (events, token) =
+            aws::fetch_log_events(&self.client, &group_name, None, start_ms, end_ms, pattern, None).await?;
+        self.log_events.items = events;
+        self.log_events.next_token = token;
+        self.log_events.loading = false;
+        if !self.log_events.items.is_empty() {
+            self.log_events.state.select(Some(0));
+        }
+        Ok(())
+    }
+}
+
+fn parse_datetime_to_ms(s: &str) -> anyhow::Result<i64> {
+    let iso_str = s.replacen(' ', "T", 1);
+    let dt: jiff::civil::DateTime = iso_str
+        .parse()
+        .map_err(|_| anyhow::anyhow!("日時のフォーマットが不正です（例: 2024-01-01 12:00:00）"))?;
+    let tz = jiff::tz::TimeZone::UTC;
+    let zoned = dt
+        .to_zoned(tz)
+        .map_err(|e| anyhow::anyhow!("タイムゾーン変換に失敗しました: {}", e))?;
+    Ok(zoned.timestamp().as_millisecond())
 }

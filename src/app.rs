@@ -124,6 +124,9 @@ pub struct App {
     pub event_search_pattern: String,
     pub event_search_focused: u8,
     pub event_search_error: Option<String>,
+    pub download_editing: bool,
+    pub download_path_buffer: String,
+    pub download_status: Option<String>,
 }
 
 impl App {
@@ -150,6 +153,9 @@ impl App {
             event_search_pattern: String::new(),
             event_search_focused: 0,
             event_search_error: None,
+            download_editing: false,
+            download_path_buffer: String::new(),
+            download_status: None,
         }
     }
 
@@ -316,7 +322,27 @@ impl App {
     }
 
     async fn handle_events_key(&mut self, code: KeyCode) -> Result<bool> {
-        if self.filter_editing {
+        self.download_status = None;
+        if self.download_editing {
+            match code {
+                KeyCode::Enter => {
+                    let path = self.download_path_buffer.clone();
+                    self.write_events_to_jsonl(&path);
+                    self.download_editing = false;
+                }
+                KeyCode::Esc => {
+                    self.download_editing = false;
+                    self.download_path_buffer.clear();
+                }
+                KeyCode::Backspace => {
+                    self.download_path_buffer.pop();
+                }
+                KeyCode::Char(c) => {
+                    self.download_path_buffer.push(c);
+                }
+                _ => {}
+            }
+        } else if self.filter_editing {
             match code {
                 KeyCode::Enter => {
                     let pattern = self.filter_buffer.clone();
@@ -352,6 +378,10 @@ impl App {
                 KeyCode::Char('/') => {
                     self.filter_editing = true;
                     self.filter_buffer = self.filter_input.clone().unwrap_or_default();
+                }
+                KeyCode::Char('d') => {
+                    self.download_path_buffer = self.default_download_path();
+                    self.download_editing = true;
                 }
                 KeyCode::Enter => {
                     if let Some(event) = self.log_events.selected().cloned() {
@@ -631,6 +661,45 @@ impl App {
             self.log_events.state.select(Some(0));
         }
         Ok(())
+    }
+
+    fn current_log_group_name(&self) -> String {
+        self.last_selected_group
+            .and_then(|i| self.log_groups.items.get(i))
+            .map(|g| {
+                g.name
+                    .rsplit('/')
+                    .find(|s| !s.is_empty())
+                    .unwrap_or("unknown")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    fn default_download_path(&self) -> String {
+        let group_name = self.current_log_group_name();
+        let date = jiff::Zoned::now().date();
+        format!("{}-{}.jsonl", group_name, date)
+    }
+
+    fn write_events_to_jsonl(&mut self, path: &str) {
+        let lines: Vec<String> = self
+            .log_events
+            .items
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "timestamp": e.timestamp,
+                    "message": e.message,
+                })
+                .to_string()
+            })
+            .collect();
+        let content = lines.join("\n") + if lines.is_empty() { "" } else { "\n" };
+        match std::fs::write(path, content) {
+            Ok(_) => self.download_status = Some(format!("Saved: {}", path)),
+            Err(e) => self.download_status = Some(format!("Error: {}", e)),
+        }
     }
 }
 

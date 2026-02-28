@@ -86,8 +86,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.render_stateful_widget(list, chunks[1], &mut app.log_events.state);
     }
 
-    // Footer / filter input
-    if app.filter_editing {
+    // Footer / filter input / download input
+    if app.download_editing {
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(" save to: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(app.download_path_buffer.as_str()),
+            Span::styled("█", Style::default().fg(Color::Cyan)),
+            Span::raw("   "),
+            Span::styled("[Enter]", Style::default().fg(Color::DarkGray)),
+            Span::raw(" save  "),
+            Span::styled("[Esc]", Style::default().fg(Color::DarkGray)),
+            Span::raw(" cancel"),
+        ]))
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+        f.render_widget(footer, chunks[2]);
+    } else if app.filter_editing {
         let footer = Paragraph::new(Line::from(vec![
             Span::styled(" filter: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(app.filter_buffer.as_str()),
@@ -100,6 +113,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ]))
         .style(Style::default().bg(Color::Rgb(30, 30, 30)));
         f.render_widget(footer, chunks[2]);
+    } else if let Some(status) = &app.download_status {
+        let (fg, prefix) = if status.starts_with("Error") {
+            (Color::Red, "")
+        } else {
+            (Color::Green, "")
+        };
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled(format!(" {}{}", prefix, status), Style::default().fg(fg).add_modifier(Modifier::BOLD)),
+        ]))
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+        f.render_widget(footer, chunks[2]);
     } else {
         let footer = Paragraph::new(Line::from(vec![
             Span::styled(" [/]", Style::default().fg(Color::Yellow)),
@@ -108,6 +132,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Span::raw(" open  "),
             Span::styled("[j/k ↑↓]", Style::default().fg(Color::Yellow)),
             Span::raw(" scroll  "),
+            Span::styled("[d]", Style::default().fg(Color::Yellow)),
+            Span::raw(" download  "),
             Span::styled("[q]", Style::default().fg(Color::Yellow)),
             Span::raw(" back"),
         ]))

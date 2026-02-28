@@ -72,17 +72,23 @@ pub async fn fetch_log_streams(
 pub async fn fetch_log_events(
     client: &Client,
     group_name: &str,
-    stream_name: &str,
+    stream_name: Option<&str>,
     start_time_ms: Option<i64>,
+    end_time_ms: Option<i64>,
     filter_pattern: Option<String>,
     next_token: Option<String>,
 ) -> Result<(Vec<LogEvent>, Option<String>)> {
     let mut req = client
         .filter_log_events()
-        .log_group_name(group_name)
-        .log_stream_names(stream_name);
+        .log_group_name(group_name);
+    if let Some(name) = stream_name {
+        req = req.log_stream_names(name);
+    }
     if let Some(start_time) = start_time_ms {
         req = req.start_time(start_time);
+    }
+    if let Some(end_time) = end_time_ms {
+        req = req.end_time(end_time);
     }
 
     if let Some(pattern) = filter_pattern {

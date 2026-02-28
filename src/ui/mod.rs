@@ -1,4 +1,6 @@
+mod event_search_screen;
 mod events_screen;
+mod group_events_screen;
 mod main_screen;
 mod viewer_screen;
 
@@ -11,5 +13,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Screen::Main => main_screen::draw(f, app),
         Screen::Events => events_screen::draw(f, app),
         Screen::Viewer => viewer_screen::draw(f, app),
+        Screen::EventSearch => event_search_screen::draw(f, app),
+        Screen::GroupEvents => group_events_screen::draw(f, app),
     }
 }

@@ -1,64 +1,30 @@
+## MODIFIED Requirements
+
 ### Requirement: 検索モードの起動
-メイン画面のアクティブパネルにフォーカスがある状態で `/` キーを押すと、検索モードに入る。
-検索モード中はパネル下部に検索バー（例: `Search: <cursor>`）が表示され、文字入力を受け付ける。
+MainScreen の状態として `main_search_active` と `main_search_query` を保持する。MainScreen のアクティブパネルにフォーカスがある状態で `/` キーを押すと、`main_search_active` が `true` になる SHALL。
 
 #### Scenario: グループパネルで検索モードに入る
-- **WHEN** アクティブパネルがグループパネルの状態で `/` キーを押す
-- **THEN** グループパネル下部に検索バーが表示される
+- **WHEN** MainScreen のアクティブパネルがグループパネルの状態で `/` キーを押す
+- **THEN** `main_search_active` が `true` になる
 
 #### Scenario: ストリームパネルで検索モードに入る
-- **WHEN** アクティブパネルがストリームパネルの状態で `/` キーを押す
-- **THEN** ストリームパネル下部に検索バーが表示される
+- **WHEN** MainScreen のアクティブパネルがストリームパネルの状態で `/` キーを押す
+- **THEN** `main_search_active` が `true` になる
 
 ### Requirement: リアルタイムフィルタリング
-検索モード中に文字を入力するたびに、アクティブパネルのリストが現在の入力文字列で即座にフィルタリングされる。
-フィルタリングは大文字小文字を区別しない部分文字列マッチとする。
+MainScreen の `handle_key` 内で検索モード中の文字入力を処理し、`apply_main_search` メソッドでフィルタリングを行う SHALL。これらのメソッドは MainScreen の `impl` に定義される SHALL。
 
 #### Scenario: 文字入力によるフィルタリング
-- **WHEN** 検索モード中に文字を入力する
-- **THEN** アクティブパネルのリストが入力文字列を含む項目のみに絞り込まれる
-
-#### Scenario: 大文字小文字を区別しない
-- **WHEN** 検索クエリに "PROD" と入力する
-- **THEN** "prod-api"、"Production"、"PROD-DB" など大文字小文字に関わらず含む項目がすべて表示される
+- **WHEN** MainScreen の検索モード中に文字を入力する
+- **THEN** MainScreen の `apply_main_search` メソッドが呼ばれ、アクティブパネルのリストがフィルタリングされる
 
 #### Scenario: Backspaceによる文字削除
-- **WHEN** 検索モード中に Backspace を押す
-- **THEN** 検索クエリの末尾1文字が削除され、リストが再フィルタリングされる
-
-#### Scenario: 一致なし
-- **WHEN** 検索クエリがいずれの項目にも一致しない
-- **THEN** パネルに「No matches」などの空状態メッセージが表示される
+- **WHEN** MainScreen の検索モード中に Backspace を押す
+- **THEN** `main_search_query` の末尾1文字が削除され、`apply_main_search` でリストが再フィルタリングされる
 
 ### Requirement: 検索モードの終了
-`Esc` キーを押すと検索モードを終了し、検索クエリをクリアして全件表示に戻る。
+MainScreen の `clear_main_search` メソッドが Esc キー処理時に呼ばれ、検索状態をリセットする SHALL。
 
 #### Scenario: Escで検索を終了する
-- **WHEN** 検索モード中に Esc を押す
-- **THEN** 検索バーが非表示になり、パネルが全件表示に戻る
-
-### Requirement: 検索中のナビゲーション
-検索モード中も j/k キーでフィルタリング済みリスト内をナビゲーションできる。
-
-#### Scenario: フィルタ結果内をj/kで移動する
-- **WHEN** 検索クエリで絞り込まれた状態で j または k を押す
-- **THEN** 表示中の絞り込み結果内でカーソルが移動する
-
-#### Scenario: 検索中にEnterでストリームを開く
-- **WHEN** ストリームパネルが検索モード中にカーソルが当たっている項目で Enter を押す
-- **THEN** 選択中の（元リストの）ログストリームのイベント画面に遷移する
-
-### Requirement: パネル切り替え時の検索リセット
-h/l キーでパネルを切り替えると検索クエリがクリアされ、全件表示に戻る。
-
-#### Scenario: パネル切り替えで検索がリセットされる
-- **WHEN** 検索モード中または検索クエリがある状態で h または l を押す
-- **THEN** 検索クエリがクリアされ、切り替え先パネルが全件表示になる
-
-### Requirement: 検索バーの表示
-検索モード中、アクティブパネルの下部（フッターの上）に検索バーを表示する。
-`Search: <query><cursor>` の形式で現在の入力内容をリアルタイムに反映する。
-
-#### Scenario: 検索バーに入力内容が反映される
-- **WHEN** 検索モード中に "api" と入力する
-- **THEN** 検索バーに `Search: api` と表示される
+- **WHEN** MainScreen の検索モード中に Esc を押す
+- **THEN** `clear_main_search` が呼ばれ、`main_search_active` が `false` に、`main_search_query` が空に、フィルタがクリアされる

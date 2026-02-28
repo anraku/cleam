@@ -1,70 +1,26 @@
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: ダウンロードキーで入力モード開始
-イベント一覧画面（`Screen::Events`）の通常モード（非フィルター編集中）において、ユーザーが `d` キーを押すと、システムはファイルパス入力モード（download editing）に遷移 SHALL。入力バッファのデフォルト値として `{ロググループ名末尾セグメント}-{YYYY-MM-DD}.jsonl` を設定 SHALL。ロググループ名が `/` を含む場合は最後尾のセグメントのみを使用 SHALL。ロググループが特定できない場合は `unknown` を使用 SHALL。
+EventsScreen の通常モード（非フィルター編集中）において、ユーザーが `d` キーを押すと、`download_editing` が `true` に遷移する SHALL。入力バッファのデフォルト値は EventsScreen が保持する `group_name` から生成される SHALL。
 
 #### Scenario: dキーで入力モード開始
-- **WHEN** イベント一覧画面でフィルター編集中でなく、`d` キーが押された
-- **THEN** ダウンロードパス入力モードに遷移し、デフォルトのファイル名（`{ロググループ名末尾セグメント}-{YYYY-MM-DD}.jsonl`）がバッファに設定される
-
-#### Scenario: ロググループ名にスラッシュが含まれる場合
-- **WHEN** ロググループ名が `/aws/lambda/my-function` の状態で `d` キーが押された
-- **THEN** デフォルトのファイル名は `my-function-{YYYY-MM-DD}.jsonl` となる（最後尾セグメントのみ使用）
-
-### Requirement: ファイルパス入力操作
-ダウンロードパス入力モード中、ユーザーは文字入力・バックスペースで出力先パスを編集できる SHALL。
-
-#### Scenario: 文字入力でパスを編集できる
-- **WHEN** ダウンロードパス入力モード中に文字キーが押された
-- **THEN** その文字がバッファの末尾に追加される
-
-#### Scenario: バックスペースで直前の文字を削除できる
-- **WHEN** ダウンロードパス入力モード中に Backspace キーが押された
-- **THEN** バッファの末尾の文字が削除される
+- **WHEN** EventsScreen でフィルター編集中でなく、`d` キーが押された
+- **THEN** `download_editing` が `true` になり、デフォルトのファイル名（`{ロググループ名末尾セグメント}-{YYYY-MM-DD}.jsonl`）がバッファに設定される
 
 ### Requirement: Enterキーでファイル書き込み
-ダウンロードパス入力モード中に `Enter` キーを押すと、システムは現在の `log_events.items` 全件を JSONL 形式で指定パスに書き込む SHALL。書き込み後、入力モードを終了 SHALL。
+EventsScreen の `handle_key` 内でダウンロードパス入力モード中に `Enter` キーが処理される際、`write_events_to_jsonl` メソッドが呼ばれる SHALL。このメソッドは EventsScreen の `impl` に定義される SHALL。
 
 #### Scenario: Enterでファイルに書き込む
-- **WHEN** ダウンロードパス入力モード中に `Enter` キーが押され、パスが有効
-- **THEN** `log_events.items` の全イベントが JSONL 形式でファイルに書き込まれ、入力モードが終了する
-
-#### Scenario: ファイルが既存の場合は上書き
-- **WHEN** 指定されたパスに既存ファイルが存在し `Enter` が押された
-- **THEN** 既存ファイルを上書きして新しい内容が書き込まれる
-
-### Requirement: JSONL 出力フォーマット
-出力ファイルの各行は `{"timestamp":<ミリ秒エポック整数>,"message":"<メッセージ>"}` の JSON オブジェクト SHALL。1イベント1行で、末尾改行を含む SHALL。
-
-#### Scenario: 正常なJSONL形式で出力される
-- **WHEN** イベント一覧のダウンロードが実行された
-- **THEN** ファイルの各行は `{"timestamp":1700000000000,"message":"some log line"}` の形式になる
-
-#### Scenario: イベントが0件の場合は空ファイルを作成
-- **WHEN** `log_events.items` が空の状態でダウンロードが実行された
-- **THEN** 空のファイルが作成される
+- **WHEN** EventsScreen のダウンロードパス入力モード中に `Enter` キーが押された
+- **THEN** EventsScreen の `write_events_to_jsonl` メソッドが呼ばれ、`log_events.items` がJSONL形式でファイルに書き込まれる
 
 ### Requirement: 書き込み結果のステータス表示
-ファイル書き込みの成功・失敗をステータスバーに表示する SHALL。
+EventsScreen の `download_status` フィールドにファイル書き込みの成功・失敗を格納する SHALL。UI描画関数は EventsScreen の `download_status` を参照してステータスバーに表示する SHALL。
 
 #### Scenario: 書き込み成功時のメッセージ
 - **WHEN** ファイルへの書き込みが成功した
-- **THEN** ステータスバーに「Saved: {ファイルパス}」のメッセージが表示される
+- **THEN** EventsScreen の `download_status` に「Saved: {ファイルパス}」が設定される
 
 #### Scenario: 書き込み失敗時のメッセージ
-- **WHEN** ファイルへの書き込みが失敗した（パーミッション不足など）
-- **THEN** ステータスバーに「Error: {エラーメッセージ}」が表示される
-
-### Requirement: Escキーでキャンセル
-ダウンロードパス入力モード中に `Esc` キーを押すと、入力モードをキャンセルして通常モードに戻る SHALL。ファイルへの書き込みは行わない SHALL。
-
-#### Scenario: Escでキャンセル
-- **WHEN** ダウンロードパス入力モード中に `Esc` キーが押された
-- **THEN** 入力モードが終了し、ファイルへの書き込みは行われない
-
-### Requirement: フィルター編集中はダウンロードキーを無視
-フィルター編集モード（`filter_editing: true`）中は `d` キーによるダウンロード開始を行わない SHALL。
-
-#### Scenario: フィルター編集中はdキーを無視する
-- **WHEN** フィルター編集モード中に `d` キーが押された
-- **THEN** ダウンロードパス入力モードには遷移せず、`d` の文字がフィルターバッファに追加される
+- **WHEN** ファイルへの書き込みが失敗した
+- **THEN** EventsScreen の `download_status` に「Error: {エラーメッセージ}」が設定される

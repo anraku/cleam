@@ -1,3 +1,8 @@
+//! メインスクリーンの状態管理。
+//!
+//! ロググループとログストリームの二ペイン表示を管理し、
+//! キーボードナビゲーションとインクリメンタル検索を処理します。
+
 use anyhow::Result;
 use aws_sdk_cloudwatchlogs::Client;
 use crossterm::event::KeyCode;
@@ -7,17 +12,29 @@ use super::{NavigateTo, ScreenAction};
 use crate::app::{ActivePanel, LogGroup, LogStream, StatefulList};
 use crate::aws;
 
+/// ロググループとログストリームを表示するメインスクリーン。
+///
+/// `h`/`l` でパネル切替、`j`/`k` でリスト移動、`/` で検索、
+/// `Enter` でイベント一覧へ遷移、`g` でイベント検索フォームへ遷移します。
 pub struct MainScreen {
+    /// 共有 AWS CloudWatch Logs クライアント
     pub client: Arc<Client>,
+    /// ロググループのリスト状態
     pub log_groups: StatefulList<LogGroup>,
+    /// ログストリームのリスト状態
     pub log_streams: StatefulList<LogStream>,
+    /// 現在フォーカスされているパネル
     pub active_panel: ActivePanel,
+    /// インクリメンタル検索の入力バッファ
     pub main_search_query: String,
+    /// 検索モードがアクティブかどうか
     pub main_search_active: bool,
+    /// ストリームリロードのトリガー検出用の前回選択グループインデックス
     pub last_selected_group: Option<usize>,
 }
 
 impl MainScreen {
+    /// AWS クライアントを受け取り、初期状態の [`MainScreen`] を生成します。
     pub fn new(client: Arc<Client>) -> Self {
         Self {
             client,
@@ -30,6 +47,10 @@ impl MainScreen {
         }
     }
 
+    /// キー入力を処理して [`ScreenAction`] を返します。
+    ///
+    /// 検索モード中は文字入力・バックスペース・Esc・Enter のみを受け付けます。
+    /// 通常モードでは vim ライクなキーバインドで操作します。
     pub async fn handle_key(&mut self, code: KeyCode) -> Result<ScreenAction> {
         if self.main_search_active {
             match code {
@@ -116,6 +137,9 @@ impl MainScreen {
         Ok(ScreenAction::None)
     }
 
+    /// 検索クエリを元にアクティブパネルのリストを絞り込みます。
+    ///
+    /// クエリが空の場合は `visible_indices` を `None` にリセットします。
     pub fn apply_main_search(&mut self) {
         let query = self.main_search_query.to_lowercase();
         match self.active_panel {
@@ -156,6 +180,7 @@ impl MainScreen {
         }
     }
 
+    /// 検索状態をクリアし、絞り込み前の選択位置を復元します。
     pub fn clear_main_search(&mut self) {
         let selected_group = self.log_groups.selected_index();
         let selected_stream = self.log_streams.selected_index();
@@ -167,6 +192,9 @@ impl MainScreen {
         self.log_streams.state.select(selected_stream);
     }
 
+    /// 選択グループが変わった場合にストリームリストを再ロードします。
+    ///
+    /// メインループ毎フレームで呼び出されます。
     pub async fn check_group_change(&mut self) -> Result<()> {
         let current = self.log_groups.selected_index();
         if current != self.last_selected_group {
@@ -179,6 +207,9 @@ impl MainScreen {
         Ok(())
     }
 
+    /// カーソルが末尾付近に達した場合にページネーションで追加ロードします。
+    ///
+    /// メインループ毎フレームで呼び出されます。
     pub async fn check_pagination(&mut self) -> Result<()> {
         if let Some(idx) = self.log_groups.selected_index() {
             let len = self.log_groups.items.len();
@@ -205,6 +236,7 @@ impl MainScreen {
         Ok(())
     }
 
+    /// ロググループを初回ロードします（ページ先頭から取得）。
     pub async fn load_log_groups(&mut self) -> Result<()> {
         self.log_groups.loading = true;
         let (groups, token) = aws::fetch_log_groups(&self.client, None).await?;
@@ -230,6 +262,7 @@ impl MainScreen {
         Ok(())
     }
 
+    /// 現在選択中のロググループのログストリームを初回ロードします。
     pub async fn load_log_streams(&mut self) -> Result<()> {
         let group_name = match self.log_groups.selected() {
             Some(g) => g.name.clone(),

@@ -1,3 +1,8 @@
+//! ログイベント一覧スクリーンの状態管理。
+//!
+//! 指定したログストリームのイベントを一覧表示し、
+//! フィルタリングと JSONL ダウンロードをサポートします。
+
 use anyhow::Result;
 use aws_sdk_cloudwatchlogs::Client;
 use crossterm::event::KeyCode;
@@ -7,21 +12,39 @@ use super::{CurrentScreen, NavigateTo, ScreenAction};
 use crate::app::{LogEvent, StatefulList};
 use crate::aws;
 
+/// ログイベント一覧を表示するスクリーン。
+///
+/// `j`/`k` でリスト移動、`Enter` で詳細表示、`/` でフィルタ編集、
+/// `d` でダウンロードパス入力、`q` で前の画面に戻ります。
 pub struct EventsScreen {
+    /// 共有 AWS CloudWatch Logs クライアント
     pub client: Arc<Client>,
+    /// ログイベントのリスト状態
     pub log_events: StatefulList<LogEvent>,
+    /// 現在適用中のフィルタパターン（`None` は全件表示）
     pub filter_input: Option<String>,
+    /// フィルタ入力モードがアクティブかどうか
     pub filter_editing: bool,
+    /// フィルタ入力バッファ
     pub filter_buffer: String,
+    /// ダウンロードパス入力モードがアクティブかどうか
     pub download_editing: bool,
+    /// ダウンロードパス入力バッファ
     pub download_path_buffer: String,
+    /// ダウンロード結果メッセージ（成功またはエラー）
     pub download_status: Option<String>,
+    /// 対象のロググループ名
     pub group_name: String,
+    /// 対象のログストリーム名
     pub stream_name: String,
+    /// 前の画面（`q` で戻るため保持）
     pub origin: Option<Box<CurrentScreen>>,
 }
 
 impl EventsScreen {
+    /// 新しい [`EventsScreen`] を生成します。
+    ///
+    /// `origin` には前の画面を渡し、`q` キーで戻れるようにします。
     pub fn new(
         client: Arc<Client>,
         group_name: String,
@@ -43,6 +66,9 @@ impl EventsScreen {
         }
     }
 
+    /// キー入力を処理して [`ScreenAction`] を返します。
+    ///
+    /// ダウンロードパス入力モードとフィルタ入力モードを優先的に処理します。
     pub async fn handle_key(&mut self, code: KeyCode) -> Result<ScreenAction> {
         self.download_status = None;
         if self.download_editing {
@@ -119,6 +145,9 @@ impl EventsScreen {
         Ok(ScreenAction::None)
     }
 
+    /// カーソルが末尾付近に達した場合にページネーションで追加ロードします。
+    ///
+    /// メインループ毎フレームで呼び出されます。
     pub async fn check_pagination(&mut self) -> Result<()> {
         if let Some(idx) = self.log_events.selected_index() {
             let len = self.log_events.items.len();
@@ -133,6 +162,7 @@ impl EventsScreen {
         Ok(())
     }
 
+    /// ログイベントを初回ロードします（現在のフィルタを適用）。
     pub async fn load_log_events(&mut self) -> Result<()> {
         let filter = self.filter_input.clone();
         self.log_events.loading = true;

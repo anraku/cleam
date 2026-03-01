@@ -1,9 +1,22 @@
+//! AWS CloudWatch Logs との通信を担うモジュール。
+//!
+//! SDK クライアントの構築と、ロググループ・ログストリーム・ログイベントの
+//! フェッチ関数を提供します。
+
 use anyhow::{Result, bail};
 use aws_config::BehaviorVersion;
 use aws_sdk_cloudwatchlogs::Client;
 
 use crate::app::{LogEvent, LogGroup, LogStream};
 
+/// AWS CloudWatch Logs SDK クライアントを構築して返します。
+///
+/// `~/.aws/config` または環境変数から AWS 設定を読み込みます。
+/// リージョンが設定されていない場合はエラーを返します。
+///
+/// # Errors
+///
+/// - AWS リージョンが未設定の場合
 pub async fn build_client() -> Result<Client> {
     let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
 
@@ -15,6 +28,17 @@ pub async fn build_client() -> Result<Client> {
     Ok(Client::new(&config))
 }
 
+/// ロググループの一覧を取得します。
+///
+/// ページネーションに対応しており、`next_token` を渡すことで続きのページを取得できます。
+///
+/// # Returns
+///
+/// `(ロググループ一覧, 次ページトークン)` のタプルを返します。
+///
+/// # Errors
+///
+/// - AWS API 呼び出しに失敗した場合（認証エラー・ネットワークエラーなど）
 pub async fn fetch_log_groups(
     client: &Client,
     next_token: Option<String>,
@@ -43,6 +67,22 @@ pub async fn fetch_log_groups(
     Ok((groups, resp.next_token().map(String::from)))
 }
 
+/// 指定ロググループのログストリーム一覧を取得します。
+///
+/// ストリームは最終イベント時刻の降順でソートされます。
+///
+/// # Arguments
+///
+/// * `group_name` - 対象のロググループ名
+/// * `next_token` - ページネーショントークン（初回は `None`）
+///
+/// # Returns
+///
+/// `(ログストリーム一覧, 次ページトークン)` のタプルを返します。
+///
+/// # Errors
+///
+/// - AWS API 呼び出しに失敗した場合
 pub async fn fetch_log_streams(
     client: &Client,
     group_name: &str,
@@ -75,6 +115,27 @@ pub async fn fetch_log_streams(
     Ok((streams, resp.next_token().map(String::from)))
 }
 
+/// ログイベントを取得します（`FilterLogEvents` API を使用）。
+///
+/// ストリーム名・時間範囲・フィルタパターンを任意で指定できます。
+/// `stream_name` が `None` の場合はロググループ全体を検索します。
+///
+/// # Arguments
+///
+/// * `group_name` - 対象のロググループ名
+/// * `stream_name` - 対象のログストリーム名（`None` でグループ全体）
+/// * `start_time_ms` - 検索開始時刻（Unix ミリ秒、`None` で無制限）
+/// * `end_time_ms` - 検索終了時刻（Unix ミリ秒、`None` で無制限）
+/// * `filter_pattern` - CloudWatch Logs フィルタパターン（`None` または空文字で全件）
+/// * `next_token` - ページネーショントークン（初回は `None`）
+///
+/// # Returns
+///
+/// `(ログイベント一覧, 次ページトークン)` のタプルを返します。
+///
+/// # Errors
+///
+/// - AWS API 呼び出しに失敗した場合
 pub async fn fetch_log_events(
     client: &Client,
     group_name: &str,

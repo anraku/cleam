@@ -1,19 +1,37 @@
+//! イベント検索フォームスクリーンの状態管理。
+//!
+//! 開始日時・終了日時・フィルタパターンを入力してグループ横断検索を実行します。
+
 use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use super::{CurrentScreen, NavigateTo, ScreenAction};
 
+/// 時間範囲とフィルタパターンでイベントを検索するフォームスクリーン。
+///
+/// `Tab`/`BackTab` でフィールド間を移動し、`Enter` で検索を実行します。
+/// 日時は `YYYY-MM-DD HH:MM:SS` 形式（UTC）で入力します。
 pub struct EventSearchScreen {
+    /// 検索対象のロググループ名
     pub group_name: String,
+    /// 検索開始日時の入力文字列（`YYYY-MM-DD HH:MM:SS`）
     pub event_search_start: String,
+    /// 検索終了日時の入力文字列（`YYYY-MM-DD HH:MM:SS`）
     pub event_search_end: String,
+    /// CloudWatch Logs フィルタパターンの入力文字列
     pub event_search_pattern: String,
+    /// 現在フォーカスされているフィールドのインデックス（0: 開始、1: 終了、2: パターン）
     pub event_search_focused: u8,
+    /// バリデーションエラーメッセージ
     pub event_search_error: Option<String>,
+    /// 前の画面（`q`/`Esc` で戻るため保持）
     pub origin: Option<Box<CurrentScreen>>,
 }
 
 impl EventSearchScreen {
+    /// 新しい [`EventSearchScreen`] を生成します。
+    ///
+    /// 開始日時は現在時刻の 1 時間前、終了日時は現在時刻で初期化されます。
     pub fn new(group_name: String, origin: Box<CurrentScreen>) -> Self {
         let now = jiff::Zoned::now();
         let one_hour_ago = now.saturating_sub(jiff::Span::new().hours(1));
@@ -28,6 +46,10 @@ impl EventSearchScreen {
         }
     }
 
+    /// キー入力を処理して [`ScreenAction`] を返します。
+    ///
+    /// `Enter` でフォームを検証し、成功すれば [`NavigateTo::NewGroupEvents`] を返します。
+    /// 日時の解析に失敗した場合は `event_search_error` にエラーメッセージを設定します。
     pub async fn handle_key(&mut self, code: KeyCode) -> Result<ScreenAction> {
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
@@ -105,6 +127,12 @@ impl EventSearchScreen {
     }
 }
 
+/// `YYYY-MM-DD HH:MM:SS` 形式の文字列を UTC Unix ミリ秒に変換します。
+///
+/// # Errors
+///
+/// - 日時の形式が不正な場合
+/// - タイムゾーン変換に失敗した場合
 fn parse_datetime_to_ms(s: &str) -> anyhow::Result<i64> {
     let iso_str = s.replacen(' ', "T", 1);
     let dt: jiff::civil::DateTime = iso_str

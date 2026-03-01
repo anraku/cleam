@@ -2,6 +2,12 @@
 name = "cleam"
 version = "0.1.0"
 edition = "2024"
+authors = ["anraku <anraku90@gmail.com>"]
+repository = "https://github.com/anraku/cleam"
+keywords = ["aws", "log"]
+license = "MIT"
+readme = "README.md"
+description = "Viewing and downloading Amazon CloudWatch Logs"
 
 [dependencies]
 ratatui = "0.29"

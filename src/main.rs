@@ -1,5 +1,6 @@
 mod app;
 mod aws;
+mod screen;
 mod tui;
 mod ui;
 

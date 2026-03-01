@@ -6,14 +6,15 @@ mod viewer_screen;
 
 use ratatui::Frame;
 
-use crate::app::{App, Screen};
+use crate::screen::CurrentScreen;
 
-pub fn draw(f: &mut Frame, app: &mut App) {
-    match app.screen {
-        Screen::Main => main_screen::draw(f, app),
-        Screen::Events => events_screen::draw(f, app),
-        Screen::Viewer => viewer_screen::draw(f, app),
-        Screen::EventSearch => event_search_screen::draw(f, app),
-        Screen::GroupEvents => group_events_screen::draw(f, app),
+pub fn draw(f: &mut Frame, screen: &mut CurrentScreen) {
+    match screen {
+        CurrentScreen::Main(s) => main_screen::draw(f, s),
+        CurrentScreen::Events(s) => events_screen::draw(f, s),
+        CurrentScreen::Viewer(s) => viewer_screen::draw(f, s),
+        CurrentScreen::EventSearch(s) => event_search_screen::draw(f, s),
+        CurrentScreen::GroupEvents(s) => group_events_screen::draw(f, s),
+        CurrentScreen::Transitioning => {}
     }
 }

@@ -1,3 +1,4 @@
+use jiff::Timestamp;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -5,15 +6,14 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
-use jiff::Timestamp;
 
-use crate::app::{ActivePanel, App};
+use crate::screen::MainScreen;
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, screen: &mut MainScreen) {
     let area = f.area();
 
     // Layout: header / panels / [search bar] / footer
-    let show_search_bar = app.main_search_active || !app.main_search_query.is_empty();
+    let show_search_bar = screen.main_search_active || !screen.main_search_query.is_empty();
     let constraints = if show_search_bar {
         vec![
             Constraint::Length(1),
@@ -36,7 +36,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Header
     let header = Paragraph::new(format!(
         " cleam  |  {}",
-        if app.log_groups.loading { "Loading..." } else { "AWS CloudWatch Logs" }
+        if screen.log_groups.loading {
+            "Loading..."
+        } else {
+            "AWS CloudWatch Logs"
+        }
     ))
     .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(header, chunks[0]);
@@ -48,7 +52,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(chunks[1]);
 
     // --- Groups pane ---
-    let groups_active = app.active_panel == ActivePanel::Groups;
+    use crate::app::ActivePanel;
+    let groups_active = screen.active_panel == ActivePanel::Groups;
     let groups_border_style = if groups_active {
         Style::default().fg(Color::Cyan)
     } else {
@@ -59,13 +64,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(groups_border_style);
 
-    let group_names: Vec<String> = app.log_groups.visible_items()
+    let group_names: Vec<String> = screen
+        .log_groups
+        .visible_items()
         .into_iter()
         .map(|g| g.name.clone())
         .collect();
-    let groups_filtered = app.log_groups.visible_indices.is_some();
+    let groups_filtered = screen.log_groups.visible_indices.is_some();
 
-    let group_items: Vec<ListItem> = group_names.iter()
+    let group_items: Vec<ListItem> = group_names
+        .iter()
         .map(|n| ListItem::new(n.as_str()))
         .collect();
 
@@ -82,17 +90,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("> ");
-        f.render_stateful_widget(groups_list, panes[0], &mut app.log_groups.state);
+        f.render_stateful_widget(groups_list, panes[0], &mut screen.log_groups.state);
     }
 
     // --- Streams pane ---
-    let streams_active = app.active_panel == ActivePanel::Streams;
+    let streams_active = screen.active_panel == ActivePanel::Streams;
     let streams_border_style = if streams_active {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let streams_title = match app.log_groups.selected() {
+    let streams_title = match screen.log_groups.selected() {
         Some(g) => format!(" Streams: {} ", g.name),
         None => " Log Streams ".to_string(),
     };
@@ -101,7 +109,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(streams_border_style);
 
-    let stream_entries: Vec<(String, String)> = app.log_streams.visible_items()
+    let stream_entries: Vec<(String, String)> = screen
+        .log_streams
+        .visible_items()
         .into_iter()
         .map(|s| {
             let time_str = match s.last_event_time {
@@ -109,17 +119,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     let Ok(ts) = Timestamp::from_millisecond(ms) else {
                         return ("--/-- --:--".to_string(), s.name.clone());
                     };
-                    let dt = ts.to_zoned(jiff::tz::TimeZone::UTC).to_string();
-                    dt
+                    ts.to_zoned(jiff::tz::TimeZone::UTC).to_string()
                 }
                 None => "--/-- --:--".to_string(),
             };
             (time_str, s.name.clone())
         })
         .collect();
-    let streams_filtered = app.log_streams.visible_indices.is_some();
+    let streams_filtered = screen.log_streams.visible_indices.is_some();
 
-    let stream_items: Vec<ListItem> = stream_entries.iter()
+    let stream_items: Vec<ListItem> = stream_entries
+        .iter()
         .map(|(time_str, name)| {
             ListItem::new(Line::from(vec![
                 Span::styled(
@@ -134,8 +144,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if stream_items.is_empty() && streams_filtered {
         let no_match = Paragraph::new("No matches").block(streams_block);
         f.render_widget(no_match, panes[1]);
-    } else if app.log_streams.items.is_empty() && !app.log_streams.loading {
-        let empty = Paragraph::new(if app.log_groups.items.is_empty() {
+    } else if screen.log_streams.items.is_empty() && !screen.log_streams.loading {
+        let empty = Paragraph::new(if screen.log_groups.items.is_empty() {
             "No log groups found"
         } else {
             "No log streams found"
@@ -152,15 +162,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("> ");
-        f.render_stateful_widget(streams_list, panes[1], &mut app.log_streams.state);
+        f.render_stateful_widget(streams_list, panes[1], &mut screen.log_streams.state);
     }
 
     // --- Search bar (shown when search is active or query is non-empty) ---
     if show_search_bar {
-        let search_text = if app.main_search_active {
-            format!(" Search: {}_", app.main_search_query)
+        let search_text = if screen.main_search_active {
+            format!(" Search: {}_", screen.main_search_query)
         } else {
-            format!(" Search: {}", app.main_search_query)
+            format!(" Search: {}", screen.main_search_query)
         };
         let search_bar = Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray));

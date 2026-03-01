@@ -6,9 +6,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::app::App;
+use crate::screen::ViewerScreen;
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, screen: &mut ViewerScreen) {
     let area = f.area();
 
     let chunks = Layout::default()
@@ -21,21 +21,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(area);
 
     // Header
-    let ts_display = app
-        .selected_event
-        .as_ref()
-        .map(|e| format_timestamp(e.timestamp))
-        .unwrap_or_default();
+    let ts_display = format_timestamp(screen.selected_event.timestamp);
     let header = Paragraph::new(format!(" {} ", ts_display))
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(header, chunks[0]);
 
     // Content
-    let message = app
-        .selected_event
-        .as_ref()
-        .map(|e| e.message.as_str())
-        .unwrap_or("");
+    let message = screen.selected_event.message.as_str();
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -45,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let content = Paragraph::new(Text::from(content_lines))
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((app.viewer_scroll, 0));
+        .scroll((screen.viewer_scroll, 0));
 
     f.render_widget(content, chunks[1]);
 
@@ -66,20 +58,21 @@ fn render_message(msg: &str) -> Vec<Line<'static>> {
     let trimmed = msg.trim();
 
     // Try JSON
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            let pretty = serde_json::to_string_pretty(&value).unwrap_or_default();
-            return pretty.lines().map(|l| highlight_json_line(l)).collect();
-        }
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        let pretty = serde_json::to_string_pretty(&value).unwrap_or_default();
+        return pretty.lines().map(highlight_json_line).collect();
     }
 
     // Plain text: color based on log level keywords
-    msg.lines().map(|l| plain_line(l)).collect()
+    msg.lines().map(plain_line).collect()
 }
 
 fn plain_line(line: &str) -> Line<'static> {
     let upper = line.to_uppercase();
-    let color = if upper.contains("ERROR") || upper.contains("FATAL") || upper.contains("CRITICAL") {
+    let color = if upper.contains("ERROR") || upper.contains("FATAL") || upper.contains("CRITICAL")
+    {
         Color::Red
     } else if upper.contains("WARN") {
         Color::Yellow
@@ -101,8 +94,8 @@ fn highlight_json_line(line: &str) -> Line<'static> {
     let content = &line[indent_len..];
 
     // Strip trailing comma for value analysis
-    let (bare, comma) = if content.ends_with(',') {
-        (&content[..content.len() - 1], ",")
+    let (bare, comma) = if let Some(stripped) = content.strip_suffix(',') {
+        (stripped, ",")
     } else {
         (content, "")
     };
@@ -118,7 +111,9 @@ fn highlight_json_line(line: &str) -> Line<'static> {
         // "key": value
         spans.push(Span::styled(
             format!("\"{}\"", key),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(": ", Style::default().fg(Color::DarkGray)));
         spans.extend(value_spans(value, comma));
@@ -172,7 +167,10 @@ fn value_spans(value: &str, comma: &str) -> Vec<Span<'static>> {
 
     let mut spans = vec![Span::styled(text, Style::default().fg(color))];
     if !comma.is_empty() {
-        spans.push(Span::styled(",".to_owned(), Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            ",".to_owned(),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     spans
 }

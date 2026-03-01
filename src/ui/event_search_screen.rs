@@ -6,9 +6,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::app::App;
+use crate::screen::EventSearchScreen;
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, screen: &mut EventSearchScreen) {
     let area = f.area();
 
     let outer = Layout::default()
@@ -21,9 +21,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(area);
 
     // Header
-    let group_name = app.log_groups.selected().map(|g| g.name.as_str()).unwrap_or("-");
-    let header = Paragraph::new(format!(" Log Event Search  │  Group: {}", group_name))
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let header = Paragraph::new(format!(
+        " Log Event Search  │  Group: {}",
+        screen.group_name
+    ))
+    .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(header, outer[0]);
 
     // Body: form fields
@@ -42,28 +44,31 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f,
         body_layout[0],
         "開始日時 (Start)",
-        &app.event_search_start,
-        app.event_search_focused == 0,
+        &screen.event_search_start,
+        screen.event_search_focused == 0,
     );
     render_field(
         f,
         body_layout[1],
         "終了日時 (End)",
-        &app.event_search_end,
-        app.event_search_focused == 1,
+        &screen.event_search_end,
+        screen.event_search_focused == 1,
     );
     render_field(
         f,
         body_layout[2],
         "Filter Pattern",
-        &app.event_search_pattern,
-        app.event_search_focused == 2,
+        &screen.event_search_pattern,
+        screen.event_search_focused == 2,
     );
 
     // Error message
-    if let Some(err) = &app.event_search_error {
+    if let Some(err) = &screen.event_search_error {
         let error_line = Paragraph::new(Line::from(vec![
-            Span::styled(" ✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " ✗ ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(err.as_str(), Style::default().fg(Color::Red)),
         ]));
         f.render_widget(error_line, body_layout[3]);
@@ -85,7 +90,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn render_field(f: &mut Frame, area: Rect, label: &str, value: &str, focused: bool) {
-    let border_color = if focused { Color::Cyan } else { Color::DarkGray };
+    let border_color = if focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let label_color = if focused { Color::Cyan } else { Color::Gray };
     let cursor = if focused {
         Span::styled("█", Style::default().fg(Color::Cyan))
@@ -104,9 +113,6 @@ fn render_field(f: &mut Frame, area: Rect, label: &str, value: &str, focused: bo
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let content = Paragraph::new(Line::from(vec![
-        Span::raw(value.to_owned()),
-        cursor,
-    ]));
+    let content = Paragraph::new(Line::from(vec![Span::raw(value.to_owned()), cursor]));
     f.render_widget(content, inner);
 }

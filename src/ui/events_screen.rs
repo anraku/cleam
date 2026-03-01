@@ -6,9 +6,9 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
-use crate::app::App;
+use crate::screen::EventsScreen;
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, screen: &mut EventsScreen) {
     let area = f.area();
 
     let chunks = Layout::default()
@@ -21,43 +21,48 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(area);
 
     // Header
-    let group_name = app.log_groups.selected().map(|g| g.name.as_str()).unwrap_or("-");
-    let stream_name = app.log_streams.selected().map(|s| s.name.as_str()).unwrap_or("-");
-    let filter_display = match &app.filter_input {
+    let filter_display = match &screen.filter_input {
         Some(f) => format!("  │  filter: {}", f),
         None => String::new(),
     };
-    let header_text = format!(" {} › {}{}", group_name, stream_name, filter_display);
-    let header = Paragraph::new(header_text)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let header_text = format!(
+        " {} › {}{}",
+        screen.group_name, screen.stream_name, filter_display
+    );
+    let header =
+        Paragraph::new(header_text).style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(header, chunks[0]);
 
     // Events list
-    let loading = app.log_events.loading;
-    let block_title = if loading { " Events (loading…) " } else { " Events " };
+    let loading = screen.log_events.loading;
+    let block_title = if loading {
+        " Events (loading…) "
+    } else {
+        " Events "
+    };
     let block = Block::default()
         .title(block_title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
 
-    if app.log_events.items.is_empty() && !loading {
+    if screen.log_events.items.is_empty() && !loading {
         let msg = Paragraph::new("  No events found.").block(block);
         f.render_widget(msg, chunks[1]);
     } else {
         // timestamp col width: "YYYY-MM-DD HH:MM:SS.mmm" = 23
         let ts_width: usize = 23;
         // subtract: borders(2) + highlight symbol "▶ " (▶ renders as 2 cols + space = 3) + separator "  "(2)
-        let available = (chunks[1].width as usize)
-            .saturating_sub(2 + 3 + ts_width + 2);
+        let available = (chunks[1].width as usize).saturating_sub(2 + 3 + ts_width + 2);
 
-        let items: Vec<ListItem> = app
+        let items: Vec<ListItem> = screen
             .log_events
             .items
             .iter()
             .map(|e| {
                 let ts = format_timestamp(e.timestamp);
                 // 全行を trim して空行を除き、スペース区切りで1行に結合
-                let joined = e.message
+                let joined = e
+                    .message
                     .lines()
                     .map(|l| l.trim().replace('\t', " "))
                     .filter(|l| !l.is_empty())
@@ -83,14 +88,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             )
             .highlight_symbol("▶ ");
 
-        f.render_stateful_widget(list, chunks[1], &mut app.log_events.state);
+        f.render_stateful_widget(list, chunks[1], &mut screen.log_events.state);
     }
 
     // Footer / filter input / download input
-    if app.download_editing {
+    if screen.download_editing {
         let footer = Paragraph::new(Line::from(vec![
-            Span::styled(" save to: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw(app.download_path_buffer.as_str()),
+            Span::styled(
+                " save to: ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(screen.download_path_buffer.as_str()),
             Span::styled("█", Style::default().fg(Color::Cyan)),
             Span::raw("   "),
             Span::styled("[Enter]", Style::default().fg(Color::DarkGray)),
@@ -100,10 +110,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ]))
         .style(Style::default().bg(Color::Rgb(30, 30, 30)));
         f.render_widget(footer, chunks[2]);
-    } else if app.filter_editing {
+    } else if screen.filter_editing {
         let footer = Paragraph::new(Line::from(vec![
-            Span::styled(" filter: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(app.filter_buffer.as_str()),
+            Span::styled(
+                " filter: ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(screen.filter_buffer.as_str()),
             Span::styled("█", Style::default().fg(Color::Yellow)),
             Span::raw("   "),
             Span::styled("[Enter]", Style::default().fg(Color::DarkGray)),
@@ -113,15 +128,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ]))
         .style(Style::default().bg(Color::Rgb(30, 30, 30)));
         f.render_widget(footer, chunks[2]);
-    } else if let Some(status) = &app.download_status {
+    } else if let Some(status) = &screen.download_status {
         let (fg, prefix) = if status.starts_with("Error") {
             (Color::Red, "")
         } else {
             (Color::Green, "")
         };
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled(format!(" {}{}", prefix, status), Style::default().fg(fg).add_modifier(Modifier::BOLD)),
-        ]))
+        let footer = Paragraph::new(Line::from(vec![Span::styled(
+            format!(" {}{}", prefix, status),
+            Style::default().fg(fg).add_modifier(Modifier::BOLD),
+        )]))
         .style(Style::default().bg(Color::Rgb(30, 30, 30)));
         f.render_widget(footer, chunks[2]);
     } else {
@@ -164,21 +180,20 @@ fn truncate_chars(s: &str, max: usize) -> String {
     result
 }
 
-
 /// Scan `line` for the first log-level keyword and return Spans with only
 /// that keyword colored; the rest of the text is left in the default color.
 fn colorize_level_keyword(line: &str) -> Vec<Span<'static>> {
     // Keywords ordered so longer matches win (CRITICAL before ERROR, etc.)
     const KEYWORDS: &[(&str, Color)] = &[
         ("CRITICAL", Color::Red),
-        ("FATAL",    Color::Red),
-        ("ERROR",    Color::Red),
-        ("ERR",      Color::Red),
-        ("WARNING",  Color::Yellow),
-        ("WARN",     Color::Yellow),
-        ("INFO",     Color::Green),
-        ("DEBUG",    Color::Cyan),
-        ("TRACE",    Color::Magenta),
+        ("FATAL", Color::Red),
+        ("ERROR", Color::Red),
+        ("ERR", Color::Red),
+        ("WARNING", Color::Yellow),
+        ("WARN", Color::Yellow),
+        ("INFO", Color::Green),
+        ("DEBUG", Color::Cyan),
+        ("TRACE", Color::Magenta),
     ];
 
     let upper = line.to_uppercase();
@@ -188,13 +203,16 @@ fn colorize_level_keyword(line: &str) -> Vec<Span<'static>> {
             // Use original-case slice for display
             let before = line[..pos].to_owned();
             let keyword = line[pos..end].to_owned();
-            let after  = line[end..].to_owned();
+            let after = line[end..].to_owned();
 
             let mut spans = Vec::new();
             if !before.is_empty() {
                 spans.push(Span::raw(before));
             }
-            spans.push(Span::styled(keyword, Style::default().fg(*color).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                keyword,
+                Style::default().fg(*color).add_modifier(Modifier::BOLD),
+            ));
             if !after.is_empty() {
                 spans.push(Span::raw(after));
             }

@@ -1,10 +1,15 @@
 use anyhow::Result;
 use aws_sdk_cloudwatchlogs::Client;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::aws;
+use crate::screen::event_search::EventSearchScreen;
+use crate::screen::{
+    CurrentScreen, EventsScreen, GroupEventsScreen, MainScreen, NavigateTo, ScreenAction,
+    ViewerScreen,
+};
 use crate::ui;
 
 pub struct StatefulList<T> {
@@ -33,7 +38,11 @@ impl<T> StatefulList<T> {
         };
         let i = match self.state.selected() {
             Some(i) => {
-                if i >= len.saturating_sub(1) { i } else { i + 1 }
+                if i >= len.saturating_sub(1) {
+                    i
+                } else {
+                    i + 1
+                }
             }
             None => 0,
         };
@@ -49,17 +58,21 @@ impl<T> StatefulList<T> {
     }
 
     pub fn selected(&self) -> Option<&T> {
-        self.state.selected().and_then(|i| match &self.visible_indices {
-            Some(v) => v.get(i).and_then(|&orig| self.items.get(orig)),
-            None => self.items.get(i),
-        })
+        self.state
+            .selected()
+            .and_then(|i| match &self.visible_indices {
+                Some(v) => v.get(i).and_then(|&orig| self.items.get(orig)),
+                None => self.items.get(i),
+            })
     }
 
     pub fn selected_index(&self) -> Option<usize> {
-        self.state.selected().and_then(|i| match &self.visible_indices {
-            Some(v) => v.get(i).copied(),
-            None => Some(i),
-        })
+        self.state
+            .selected()
+            .and_then(|i| match &self.visible_indices {
+                Some(v) => v.get(i).copied(),
+                None => Some(i),
+            })
     }
 
     pub fn visible_items(&self) -> Vec<&T> {
@@ -68,15 +81,6 @@ impl<T> StatefulList<T> {
             None => self.items.iter().collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Screen {
-    Main,
-    Events,
-    Viewer,
-    EventSearch,
-    GroupEvents,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,614 +107,121 @@ pub struct LogEvent {
 }
 
 pub struct App {
-    pub screen: Screen,
-    pub active_panel: ActivePanel,
-    pub client: Client,
-    pub log_groups: StatefulList<LogGroup>,
-    pub log_streams: StatefulList<LogStream>,
-    pub log_events: StatefulList<LogEvent>,
-    pub selected_event: Option<LogEvent>,
-    pub filter_input: Option<String>,
-    pub filter_editing: bool,
-    pub filter_buffer: String,
-    pub viewer_scroll: u16,
-    pub viewer_origin: Screen,
-    pub last_selected_group: Option<usize>,
+    pub client: Arc<Client>,
+    pub screen: CurrentScreen,
     pub needs_clear: bool,
-    pub main_search_query: String,
-    pub main_search_active: bool,
-    pub event_search_start: String,
-    pub event_search_end: String,
-    pub event_search_pattern: String,
-    pub event_search_focused: u8,
-    pub event_search_error: Option<String>,
-    pub download_editing: bool,
-    pub download_path_buffer: String,
-    pub download_status: Option<String>,
 }
 
 impl App {
     pub fn new(client: Client) -> Self {
+        let client = Arc::new(client);
+        let main_screen = MainScreen::new(Arc::clone(&client));
         Self {
-            screen: Screen::Main,
-            active_panel: ActivePanel::Groups,
             client,
-            log_groups: StatefulList::new(),
-            log_streams: StatefulList::new(),
-            log_events: StatefulList::new(),
-            selected_event: None,
-            filter_input: None,
-            filter_editing: false,
-            filter_buffer: String::new(),
-            viewer_scroll: 0,
-            viewer_origin: Screen::Events,
-            last_selected_group: None,
+            screen: CurrentScreen::Main(main_screen),
             needs_clear: false,
-            main_search_query: String::new(),
-            main_search_active: false,
-            event_search_start: String::new(),
-            event_search_end: String::new(),
-            event_search_pattern: String::new(),
-            event_search_focused: 0,
-            event_search_error: None,
-            download_editing: false,
-            download_path_buffer: String::new(),
-            download_status: None,
         }
     }
 
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        // Initial load of log groups
-        self.load_log_groups().await?;
+        if let CurrentScreen::Main(s) = &mut self.screen {
+            s.load_log_groups().await?;
+        }
 
         loop {
             if self.needs_clear {
                 terminal.clear()?;
                 self.needs_clear = false;
             }
-            terminal.draw(|f| ui::draw(f, self))?;
+            terminal.draw(|f| ui::draw(f, &mut self.screen))?;
 
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind != KeyEventKind::Press {
-                        continue;
-                    }
-                    if self.handle_key(key.code).await? {
-                        break;
-                    }
+            if event::poll(Duration::from_millis(100))?
+                && let Event::Key(key) = event::read()?
+            {
+                if key.kind != KeyEventKind::Press {
+                    continue;
                 }
-            }
-
-            // Check if selected group changed and reload streams
-            self.check_group_change().await?;
-
-            // Pagination triggers
-            self.check_pagination().await?;
-        }
-
-        Ok(())
-    }
-
-    async fn handle_key(&mut self, code: KeyCode) -> Result<bool> {
-        match self.screen {
-            Screen::Main => self.handle_main_key(code).await,
-            Screen::Events => self.handle_events_key(code).await,
-            Screen::Viewer => self.handle_viewer_key(code).await,
-            Screen::EventSearch => self.handle_event_search_key(code).await,
-            Screen::GroupEvents => self.handle_group_events_key(code).await,
-        }
-    }
-
-    fn apply_main_search(&mut self) {
-        let query = self.main_search_query.to_lowercase();
-        match self.active_panel {
-            ActivePanel::Groups => {
-                if query.is_empty() {
-                    self.log_groups.visible_indices = None;
-                } else {
-                    let indices: Vec<usize> = self.log_groups.items.iter().enumerate()
-                        .filter(|(_, g)| g.name.to_lowercase().contains(&query))
-                        .map(|(i, _)| i)
-                        .collect();
-                    let new_pos = if indices.is_empty() { None } else { Some(0) };
-                    self.log_groups.visible_indices = Some(indices);
-                    self.log_groups.state.select(new_pos);
-                }
-            }
-            ActivePanel::Streams => {
-                if query.is_empty() {
-                    self.log_streams.visible_indices = None;
-                } else {
-                    let indices: Vec<usize> = self.log_streams.items.iter().enumerate()
-                        .filter(|(_, s)| s.name.to_lowercase().contains(&query))
-                        .map(|(i, _)| i)
-                        .collect();
-                    let new_pos = if indices.is_empty() { None } else { Some(0) };
-                    self.log_streams.visible_indices = Some(indices);
-                    self.log_streams.state.select(new_pos);
-                }
-            }
-        }
-    }
-
-    fn clear_main_search(&mut self) {
-        let selected_group = self.log_groups.selected_index();
-        let selected_stream = self.log_streams.selected_index();
-        self.main_search_active = false;
-        self.main_search_query.clear();
-        self.log_groups.visible_indices = None;
-        self.log_streams.visible_indices = None;
-        self.log_groups.state.select(selected_group);
-        self.log_streams.state.select(selected_stream);
-    }
-
-    async fn handle_main_key(&mut self, code: KeyCode) -> Result<bool> {
-        if self.main_search_active {
-            match code {
-                KeyCode::Esc => {
-                    self.clear_main_search();
-                }
-                KeyCode::Backspace => {
-                    self.main_search_query.pop();
-                    self.apply_main_search();
-                }
-                KeyCode::Enter => {
-                    if self.main_search_query.is_empty() {
-                        self.clear_main_search();
-                    } else {
-                        self.main_search_active = false;
-                        self.main_search_query.clear();
-                    }
-                }
-                KeyCode::Char(c) => {
-                    self.main_search_query.push(c);
-                    self.apply_main_search();
-                }
-                _ => {}
-            }
-        } else {
-            match code {
-                KeyCode::Char('q') => return Ok(true),
-                KeyCode::Char('l') => {
-                    self.active_panel = ActivePanel::Streams;
-                }
-                KeyCode::Char('h') => {
-                    self.active_panel = ActivePanel::Groups;
-                }
-                KeyCode::Char('j') | KeyCode::Down => match self.active_panel {
-                    ActivePanel::Groups => self.log_groups.next(),
-                    ActivePanel::Streams => self.log_streams.next(),
-                },
-                KeyCode::Char('k') | KeyCode::Up => match self.active_panel {
-                    ActivePanel::Groups => self.log_groups.previous(),
-                    ActivePanel::Streams => self.log_streams.previous(),
-                },
-                KeyCode::Char('/') => {
-                    self.main_search_active = true;
-                }
-                KeyCode::Char('g') => {
-                    if self.log_groups.state.selected().is_some() && !self.log_groups.items.is_empty() {
-                        let now = jiff::Zoned::now();
-                        let one_hour_ago = now.saturating_sub(jiff::Span::new().hours(1));
-                        self.event_search_start = one_hour_ago.strftime("%Y-%m-%d %H:%M:%S").to_string();
-                        self.event_search_end = now.strftime("%Y-%m-%d %H:%M:%S").to_string();
-                        self.event_search_pattern = String::new();
-                        self.event_search_focused = 0;
-                        self.event_search_error = None;
-                        self.screen = Screen::EventSearch;
-                        self.needs_clear = true;
-                    }
-                }
-                KeyCode::Enter => {
-                    if self.active_panel == ActivePanel::Streams
-                        && !self.log_streams.items.is_empty()
-                        && self.log_streams.state.selected().is_some()
-                    {
-                        self.screen = Screen::Events;
-                        self.needs_clear = true;
-                        self.log_events = StatefulList::new();
-                        self.filter_input = None;
-                        self.load_log_events().await?;
-                    } else if self.active_panel == ActivePanel::Groups {
-                        self.active_panel = ActivePanel::Streams;
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(false)
-    }
-
-    async fn handle_events_key(&mut self, code: KeyCode) -> Result<bool> {
-        self.download_status = None;
-        if self.download_editing {
-            match code {
-                KeyCode::Enter => {
-                    let path = self.download_path_buffer.clone();
-                    self.write_events_to_jsonl(&path);
-                    self.download_editing = false;
-                }
-                KeyCode::Esc => {
-                    self.download_editing = false;
-                    self.download_path_buffer.clear();
-                }
-                KeyCode::Backspace => {
-                    self.download_path_buffer.pop();
-                }
-                KeyCode::Char(c) => {
-                    self.download_path_buffer.push(c);
-                }
-                _ => {}
-            }
-        } else if self.filter_editing {
-            match code {
-                KeyCode::Enter => {
-                    let pattern = self.filter_buffer.clone();
-                    self.filter_input = if pattern.is_empty() {
-                        None
-                    } else {
-                        Some(pattern)
-                    };
-                    self.filter_editing = false;
-                    self.log_events = StatefulList::new();
-                    self.load_log_events().await?;
-                }
-                KeyCode::Esc => {
-                    self.filter_editing = false;
-                    self.filter_buffer.clear();
-                }
-                KeyCode::Backspace => {
-                    self.filter_buffer.pop();
-                }
-                KeyCode::Char(c) => {
-                    self.filter_buffer.push(c);
-                }
-                _ => {}
-            }
-        } else {
-            match code {
-                KeyCode::Char('q') => {
-                    self.screen = Screen::Main;
-                    self.needs_clear = true;
-                }
-                KeyCode::Char('j') | KeyCode::Down => self.log_events.next(),
-                KeyCode::Char('k') | KeyCode::Up => self.log_events.previous(),
-                KeyCode::Char('/') => {
-                    self.filter_editing = true;
-                    self.filter_buffer = self.filter_input.clone().unwrap_or_default();
-                }
-                KeyCode::Char('d') => {
-                    self.download_path_buffer = self.default_download_path();
-                    self.download_editing = true;
-                }
-                KeyCode::Enter => {
-                    if let Some(event) = self.log_events.selected().cloned() {
-                        self.selected_event = Some(event);
-                        self.viewer_scroll = 0;
-                        self.viewer_origin = Screen::Events;
-                        self.screen = Screen::Viewer;
-                        self.needs_clear = true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(false)
-    }
-
-    async fn handle_viewer_key(&mut self, code: KeyCode) -> Result<bool> {
-        match code {
-            KeyCode::Char('q') => {
-                self.screen = self.viewer_origin.clone();
-                self.needs_clear = true;
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.viewer_scroll = self.viewer_scroll.saturating_add(1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.viewer_scroll = self.viewer_scroll.saturating_sub(1);
-            }
-            _ => {}
-        }
-        Ok(false)
-    }
-
-    async fn handle_event_search_key(&mut self, code: KeyCode) -> Result<bool> {
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = Screen::Main;
-                self.needs_clear = true;
-            }
-            KeyCode::Tab => {
-                self.event_search_focused = (self.event_search_focused + 1) % 3;
-            }
-            KeyCode::BackTab => {
-                self.event_search_focused = (self.event_search_focused + 2) % 3;
-            }
-            KeyCode::Backspace => {
-                match self.event_search_focused {
-                    0 => { self.event_search_start.pop(); }
-                    1 => { self.event_search_end.pop(); }
-                    _ => { self.event_search_pattern.pop(); }
-                }
-            }
-            KeyCode::Char(c) => {
-                match self.event_search_focused {
-                    0 => self.event_search_start.push(c),
-                    1 => self.event_search_end.push(c),
-                    _ => self.event_search_pattern.push(c),
-                }
-            }
-            KeyCode::Enter => {
-                let start_ms_result = if self.event_search_start.is_empty() {
-                    Ok(None)
-                } else {
-                    parse_datetime_to_ms(&self.event_search_start).map(Some)
+                let action = match &mut self.screen {
+                    CurrentScreen::Main(s) => s.handle_key(key.code).await?,
+                    CurrentScreen::Events(s) => s.handle_key(key.code).await?,
+                    CurrentScreen::Viewer(s) => s.handle_key(key.code).await?,
+                    CurrentScreen::EventSearch(s) => s.handle_key(key.code).await?,
+                    CurrentScreen::GroupEvents(s) => s.handle_key(key.code).await?,
+                    CurrentScreen::Transitioning => ScreenAction::None,
                 };
-                let end_ms_result = if self.event_search_end.is_empty() {
-                    Ok(None)
-                } else {
-                    parse_datetime_to_ms(&self.event_search_end).map(Some)
-                };
-                match (start_ms_result, end_ms_result) {
-                    (Ok(start_ms), Ok(end_ms)) => {
-                        self.event_search_error = None;
-                        self.log_events = StatefulList::new();
-                        self.load_group_events(start_ms, end_ms).await?;
-                        self.screen = Screen::GroupEvents;
+                match action {
+                    ScreenAction::None => {}
+                    ScreenAction::Quit => break,
+                    ScreenAction::Navigate(nav) => {
                         self.needs_clear = true;
-                    }
-                    (Err(_), _) => {
-                        self.event_search_error = Some(
-                            "開始日時の形式が不正です（例: 2024-01-01 12:00:00）".to_string(),
-                        );
-                    }
-                    (_, Err(_)) => {
-                        self.event_search_error = Some(
-                            "終了日時の形式が不正です（例: 2024-01-01 12:00:00）".to_string(),
-                        );
+                        self.handle_navigate(nav).await?;
                     }
                 }
             }
-            _ => {}
-        }
-        Ok(false)
-    }
 
-    async fn handle_group_events_key(&mut self, code: KeyCode) -> Result<bool> {
-        match code {
-            KeyCode::Char('q') => {
-                self.screen = Screen::EventSearch;
-                self.needs_clear = true;
+            if let CurrentScreen::Main(s) = &mut self.screen {
+                s.check_group_change().await?;
+                s.check_pagination().await?;
             }
-            KeyCode::Char('j') | KeyCode::Down => self.log_events.next(),
-            KeyCode::Char('k') | KeyCode::Up => self.log_events.previous(),
-            KeyCode::Enter => {
-                if let Some(event) = self.log_events.selected().cloned() {
-                    self.selected_event = Some(event);
-                    self.viewer_scroll = 0;
-                    self.viewer_origin = Screen::GroupEvents;
-                    self.screen = Screen::Viewer;
-                    self.needs_clear = true;
-                }
+            if let CurrentScreen::Events(s) = &mut self.screen {
+                s.check_pagination().await?;
             }
-            _ => {}
         }
-        Ok(false)
-    }
 
-    async fn check_group_change(&mut self) -> Result<()> {
-        let current = self.log_groups.selected_index();
-        if current != self.last_selected_group {
-            self.last_selected_group = current;
-            self.log_streams = StatefulList::new();
-            if current.is_some() {
-                self.load_log_streams().await?;
-            }
-        }
         Ok(())
     }
 
-    async fn check_pagination(&mut self) -> Result<()> {
-        if self.screen == Screen::Main {
-            // Groups pagination
-            if let Some(idx) = self.log_groups.selected_index() {
-                let len = self.log_groups.items.len();
-                if len > 0 && idx + 5 >= len && self.log_groups.next_token.is_some() && !self.log_groups.loading {
-                    self.load_more_groups().await?;
-                }
+    async fn handle_navigate(&mut self, nav: NavigateTo) -> Result<()> {
+        match nav {
+            NavigateTo::NewEvents {
+                group_name,
+                stream_name,
+            } => {
+                let origin = std::mem::replace(&mut self.screen, CurrentScreen::Transitioning);
+                let mut s = EventsScreen::new(
+                    Arc::clone(&self.client),
+                    group_name,
+                    stream_name,
+                    Box::new(origin),
+                );
+                s.load_log_events().await?;
+                self.screen = CurrentScreen::Events(s);
             }
-            // Streams pagination
-            if self.active_panel == ActivePanel::Streams {
-                if let Some(idx) = self.log_streams.selected_index() {
-                    let len = self.log_streams.items.len();
-                    if len > 0 && idx + 5 >= len && self.log_streams.next_token.is_some() && !self.log_streams.loading {
-                        self.load_more_streams().await?;
-                    }
-                }
+            NavigateTo::NewViewer { event } => {
+                let origin = std::mem::replace(&mut self.screen, CurrentScreen::Transitioning);
+                let viewer = ViewerScreen::new(event, Box::new(origin));
+                self.screen = CurrentScreen::Viewer(viewer);
             }
-        }
-        if self.screen == Screen::Events {
-            if let Some(idx) = self.log_events.selected_index() {
-                let len = self.log_events.items.len();
-                if len > 0 && idx + 5 >= len && self.log_events.next_token.is_some() && !self.log_events.loading {
-                    self.load_more_events().await?;
-                }
+            NavigateTo::NewEventSearch { group_name } => {
+                let origin = std::mem::replace(&mut self.screen, CurrentScreen::Transitioning);
+                let s = EventSearchScreen::new(group_name, Box::new(origin));
+                self.screen = CurrentScreen::EventSearch(s);
+            }
+            NavigateTo::NewGroupEvents {
+                group_name,
+                start_ms,
+                end_ms,
+                pattern,
+                start_display,
+                end_display,
+                pattern_display,
+            } => {
+                let origin = std::mem::replace(&mut self.screen, CurrentScreen::Transitioning);
+                let mut s = GroupEventsScreen::new(
+                    Arc::clone(&self.client),
+                    group_name,
+                    start_display,
+                    end_display,
+                    pattern_display,
+                    Box::new(origin),
+                );
+                s.load_group_events(start_ms, end_ms, pattern).await?;
+                self.screen = CurrentScreen::GroupEvents(s);
+            }
+            NavigateTo::Restore(screen) => {
+                self.screen = *screen;
             }
         }
         Ok(())
     }
-
-    async fn load_log_groups(&mut self) -> Result<()> {
-        self.log_groups.loading = true;
-        let (groups, token) = aws::fetch_log_groups(&self.client, None).await?;
-        self.log_groups.items = groups;
-        self.log_groups.next_token = token;
-        self.log_groups.loading = false;
-        if !self.log_groups.items.is_empty() {
-            self.log_groups.state.select(Some(0));
-        }
-        Ok(())
-    }
-
-    async fn load_more_groups(&mut self) -> Result<()> {
-        self.log_groups.loading = true;
-        let token = self.log_groups.next_token.clone();
-        let (groups, next) = aws::fetch_log_groups(&self.client, token).await?;
-        self.log_groups.items.extend(groups);
-        self.log_groups.next_token = next;
-        self.log_groups.loading = false;
-        if self.active_panel == ActivePanel::Groups && !self.main_search_query.is_empty() {
-            self.apply_main_search();
-        }
-        Ok(())
-    }
-
-    async fn load_log_streams(&mut self) -> Result<()> {
-        let group_name = match self.log_groups.selected() {
-            Some(g) => g.name.clone(),
-            None => return Ok(()),
-        };
-        self.log_streams.loading = true;
-        let (streams, token) = aws::fetch_log_streams(&self.client, &group_name, None).await?;
-        self.log_streams.items = streams;
-        self.log_streams.next_token = token;
-        self.log_streams.loading = false;
-        if !self.log_streams.items.is_empty() {
-            self.log_streams.state.select(Some(0));
-        }
-        Ok(())
-    }
-
-    async fn load_more_streams(&mut self) -> Result<()> {
-        let group_name = match self.log_groups.selected() {
-            Some(g) => g.name.clone(),
-            None => return Ok(()),
-        };
-        self.log_streams.loading = true;
-        let token = self.log_streams.next_token.clone();
-        let (streams, next) = aws::fetch_log_streams(&self.client, &group_name, token).await?;
-        self.log_streams.items.extend(streams);
-        self.log_streams.next_token = next;
-        self.log_streams.loading = false;
-        if !self.main_search_query.is_empty() {
-            self.apply_main_search();
-        }
-        Ok(())
-    }
-
-    pub async fn load_log_events(&mut self) -> Result<()> {
-        let group_name = match self.log_groups.selected() {
-            Some(g) => g.name.clone(),
-            None => return Ok(()),
-        };
-        let stream_name = match self.log_streams.selected() {
-            Some(s) => s.name.clone(),
-            None => return Ok(()),
-        };
-        let filter = self.filter_input.clone();
-        self.log_events.loading = true;
-        let (events, token) =
-            aws::fetch_log_events(&self.client, &group_name, Some(&stream_name), None, None, filter, None).await?;
-        self.log_events.items = events;
-        self.log_events.next_token = token;
-        self.log_events.loading = false;
-        if !self.log_events.items.is_empty() {
-            self.log_events.state.select(Some(0));
-        }
-        Ok(())
-    }
-
-    async fn load_more_events(&mut self) -> Result<()> {
-        let group_name = match self.log_groups.selected() {
-            Some(g) => g.name.clone(),
-            None => return Ok(()),
-        };
-        let stream_name = match self.log_streams.selected() {
-            Some(s) => s.name.clone(),
-            None => return Ok(()),
-        };
-        let filter = self.filter_input.clone();
-        let token = self.log_events.next_token.clone();
-        self.log_events.loading = true;
-        let (events, next) =
-            aws::fetch_log_events(&self.client, &group_name, Some(&stream_name), None, None, filter, token).await?;
-        self.log_events.items.extend(events);
-        self.log_events.next_token = next;
-        self.log_events.loading = false;
-        Ok(())
-    }
-
-    async fn load_group_events(&mut self, start_ms: Option<i64>, end_ms: Option<i64>) -> Result<()> {
-        let group_name = match self.log_groups.selected() {
-            Some(g) => g.name.clone(),
-            None => return Ok(()),
-        };
-        let pattern = if self.event_search_pattern.is_empty() {
-            None
-        } else {
-            Some(self.event_search_pattern.clone())
-        };
-        self.log_events.loading = true;
-        let (events, token) =
-            aws::fetch_log_events(&self.client, &group_name, None, start_ms, end_ms, pattern, None).await?;
-        self.log_events.items = events;
-        self.log_events.next_token = token;
-        self.log_events.loading = false;
-        if !self.log_events.items.is_empty() {
-            self.log_events.state.select(Some(0));
-        }
-        Ok(())
-    }
-
-    fn current_log_group_name(&self) -> String {
-        self.last_selected_group
-            .and_then(|i| self.log_groups.items.get(i))
-            .map(|g| {
-                g.name
-                    .rsplit('/')
-                    .find(|s| !s.is_empty())
-                    .unwrap_or("unknown")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "unknown".to_string())
-    }
-
-    fn default_download_path(&self) -> String {
-        let group_name = self.current_log_group_name();
-        let date = jiff::Zoned::now().date();
-        format!("{}-{}.jsonl", group_name, date)
-    }
-
-    fn write_events_to_jsonl(&mut self, path: &str) {
-        let lines: Vec<String> = self
-            .log_events
-            .items
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "timestamp": e.timestamp,
-                    "message": e.message,
-                })
-                .to_string()
-            })
-            .collect();
-        let content = lines.join("\n") + if lines.is_empty() { "" } else { "\n" };
-        match std::fs::write(path, content) {
-            Ok(_) => self.download_status = Some(format!("Saved: {}", path)),
-            Err(e) => self.download_status = Some(format!("Error: {}", e)),
-        }
-    }
-}
-
-fn parse_datetime_to_ms(s: &str) -> anyhow::Result<i64> {
-    let iso_str = s.replacen(' ', "T", 1);
-    let dt: jiff::civil::DateTime = iso_str
-        .parse()
-        .map_err(|_| anyhow::anyhow!("日時のフォーマットが不正です（例: 2024-01-01 12:00:00）"))?;
-    let tz = jiff::tz::TimeZone::UTC;
-    let zoned = dt
-        .to_zoned(tz)
-        .map_err(|e| anyhow::anyhow!("タイムゾーン変換に失敗しました: {}", e))?;
-    Ok(zoned.timestamp().as_millisecond())
 }

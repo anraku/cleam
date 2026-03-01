@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use aws_config::BehaviorVersion;
 use aws_sdk_cloudwatchlogs::Client;
 
@@ -9,9 +9,7 @@ pub async fn build_client() -> Result<Client> {
 
     // Verify region is set
     if config.region().is_none() {
-        bail!(
-            "AWS region is not configured. Set AWS_DEFAULT_REGION or configure ~/.aws/config."
-        );
+        bail!("AWS region is not configured. Set AWS_DEFAULT_REGION or configure ~/.aws/config.");
     }
 
     Ok(Client::new(&config))
@@ -26,13 +24,20 @@ pub async fn fetch_log_groups(
         req = req.next_token(token);
     }
     let resp = req.send().await.map_err(|e| {
-        anyhow::anyhow!("Failed to fetch log groups: {}. Run `aws sso login` if credentials expired.", e)
+        anyhow::anyhow!(
+            "Failed to fetch log groups: {}. Run `aws sso login` if credentials expired.",
+            e
+        )
     })?;
 
     let groups = resp
         .log_groups()
         .iter()
-        .filter_map(|g| g.log_group_name().map(|n| LogGroup { name: n.to_string() }))
+        .filter_map(|g| {
+            g.log_group_name().map(|n| LogGroup {
+                name: n.to_string(),
+            })
+        })
         .collect();
 
     Ok((groups, resp.next_token().map(String::from)))
@@ -51,9 +56,10 @@ pub async fn fetch_log_streams(
     if let Some(token) = next_token {
         req = req.next_token(token);
     }
-    let resp = req.send().await.map_err(|e| {
-        anyhow::anyhow!("Failed to fetch log streams: {}", e)
-    })?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch log streams: {}", e))?;
 
     let streams = resp
         .log_streams()
@@ -78,9 +84,7 @@ pub async fn fetch_log_events(
     filter_pattern: Option<String>,
     next_token: Option<String>,
 ) -> Result<(Vec<LogEvent>, Option<String>)> {
-    let mut req = client
-        .filter_log_events()
-        .log_group_name(group_name);
+    let mut req = client.filter_log_events().log_group_name(group_name);
     if let Some(name) = stream_name {
         req = req.log_stream_names(name);
     }
@@ -91,18 +95,19 @@ pub async fn fetch_log_events(
         req = req.end_time(end_time);
     }
 
-    if let Some(pattern) = filter_pattern {
-        if !pattern.is_empty() {
-            req = req.filter_pattern(pattern);
-        }
+    if let Some(pattern) = filter_pattern
+        && !pattern.is_empty()
+    {
+        req = req.filter_pattern(pattern);
     }
     if let Some(token) = next_token {
         req = req.next_token(token);
     }
 
-    let resp = req.send().await.map_err(|e| {
-        anyhow::anyhow!("Failed to fetch log events: {}", e)
-    })?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch log events: {}", e))?;
 
     let events = resp
         .events()
